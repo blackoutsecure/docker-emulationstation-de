@@ -5,7 +5,7 @@
 # docker-emulationstation-de
 
 [![GitHub Stars](https://img.shields.io/github/stars/blackoutsecure/docker-emulationstation-de?style=flat-square&color=E7931D&logo=github)](https://github.com/blackoutsecure/docker-emulationstation-de/stargazers)
-[![Docker Pulls](https://img.shields.io/docker/pulls/blackoutsecure/docker-emulationstation-de?style=flat-square&color=E7931D&logo=docker&logoColor=FFFFFF)](https://hub.docker.com/r/blackoutsecure/docker-emulationstation-de)
+[![Docker Pulls](https://img.shields.io/docker/pulls/blackoutsecure/docker-emulationstation-de?style=flat-square&color=E7931D&logo=docker&logoColor=FFFFFF)](https://hub.docker.com/r/blackoutsecure/emulationstation-de)
 [![GitHub Release](https://img.shields.io/github/release/blackoutsecure/docker-emulationstation-de.svg?style=flat-square&color=E7931D&logo=github&logoColor=FFFFFF)](https://github.com/blackoutsecure/docker-emulationstation-de/releases)
 [![Release CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/release.yml?style=flat-square&label=release%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/release.yml)
 [![Docker CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/dockerhub-publish.yml?style=flat-square&label=docker%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/dockerhub-publish.yml)
