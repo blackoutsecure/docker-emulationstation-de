@@ -1,0 +1,177 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: Release name (optional, defaults to upstream ES-DE stable version)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  REGISTRY: docker.io
+  BASE_IMAGE_REGISTRY: ghcr.io
+  DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME || 'blackoutsecure' }}
+  IMAGE_NAME: docker-emulationstation-de
+  REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+  UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
+  UPSTREAM_RELEASE_API_URL: https://gitlab.com/api/v4/projects/es-de%2Femulationstation-de/releases/permalink/latest
+  UPSTREAM_GIT_URL: https://gitlab.com/es-de/emulationstation-de.git
+
+jobs:
+  resolve-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      esde_build_ref: ${{ steps.resolve.outputs.esde_build_ref }}
+    steps:
+      - name: Resolve release metadata
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RELEASE_NAME: ${{ github.event.inputs.release_name }}
+          GH_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_RELEASE_NAME: ${{ github.event.release.name }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_META_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_JSON_URL}")"
+          STABLE_TAG="$(echo "${RELEASE_META_JSON}" | jq -r '.stable.version // empty')"
+
+          if [ -z "${STABLE_TAG}" ]; then
+            RELEASE_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_API_URL}")"
+            STABLE_TAG="$(echo "${RELEASE_JSON}" | jq -r '.tag_name // empty')"
+          fi
+
+          if [ -z "${STABLE_TAG}" ] || [ "${STABLE_TAG}" = "null" ]; then
+            echo "Failed to resolve ES-DE stable release tag"
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/${STABLE_TAG}" >/dev/null 2>&1; then
+            ESDE_BUILD_REF="${STABLE_TAG}"
+          elif git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/v${STABLE_TAG}" >/dev/null 2>&1; then
+            ESDE_BUILD_REF="v${STABLE_TAG}"
+          else
+            ESDE_BUILD_REF="${STABLE_TAG}"
+          fi
+
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            RELEASE_TAG="${STABLE_TAG}"
+            RELEASE_NAME="${INPUT_RELEASE_NAME:-ES-DE ${STABLE_TAG}}"
+          else
+            RELEASE_TAG="${GH_RELEASE_TAG:-${STABLE_TAG}}"
+            RELEASE_NAME="${GH_RELEASE_NAME:-ES-DE ${STABLE_TAG}}"
+          fi
+
+          echo "release_tag=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "esde_build_ref=${ESDE_BUILD_REF}" >> "$GITHUB_OUTPUT"
+
+  build-and-publish:
+    needs: resolve-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Dockerfile syntax
+        run: docker run --rm -i hadolint/hadolint:latest hadolint - < ./Dockerfile || true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Validate Docker Hub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "${DOCKERHUB_USERNAME}" ] || (echo "DOCKERHUB_USERNAME missing" && exit 1)
+          [ -n "${DOCKERHUB_TOKEN}" ] || (echo "DOCKERHUB_TOKEN missing" && exit 1)
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build args
+        id: buildargs
+        run: echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push release tags
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          pull: true
+          no-cache: false
+          provenance: false
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
+            BUILD_DATE=${{ steps.buildargs.outputs.build_date }}
+            VERSION=stable-${{ needs.resolve-release.outputs.release_tag }}
+            ESDE_VERSION=${{ needs.resolve-release.outputs.esde_build_ref }}
+            ESDE_CMAKE_BUILD_TYPE=Release
+            ESDE_STRIP_BINARIES=1
+            ESDE_APPLICATION_UPDATER=off
+            ESDE_DEINIT_ON_LAUNCH=off
+            ESDE_GLES=off
+            ESDE_VIDEO_HW_DECODING=off
+            VCS_URL=${{ env.REPO_URL }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.buildargs.outputs.build_date }}
+            org.opencontainers.image.version=${{ needs.resolve-release.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ env.REPO_URL }}
+            org.opencontainers.image.url=${{ env.REPO_URL }}
+            build_version=Linuxserver.io version:- stable-${{ needs.resolve-release.outputs.release_tag }} Build-date:- ${{ steps.buildargs.outputs.build_date }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}
+            ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-${{ github.sha }}
+
+  create-github-release:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: [resolve-release, build-and-publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release notes file
+        run: |
+          cat > /tmp/release_notes.md << 'EOF'
+          ## ES-DE Container Release
+
+          - Image: `${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}`
+          - Tag: `${{ needs.resolve-release.outputs.release_tag }}`
+          - ES-DE upstream ref: `${{ needs.resolve-release.outputs.esde_build_ref }}`
+          - Built from: `${{ github.sha }}`
+
+          ### Pull
+
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}
+          ```
+          EOF
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.resolve-release.outputs.release_tag }}
+          name: ${{ needs.resolve-release.outputs.release_name }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: false

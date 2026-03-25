@@ -1,0 +1,55 @@
+name: docker-emulationstation-de
+description: >-
+  LinuxServer.io style Debian containerized build of EmulationStation-DE (ES-DE)
+  for local display and arcade-oriented hardware passthrough.
+
+post-provisioning: >-
+  ## Usage instructions
+
+  Include this snippet in your docker-compose.yml file under 'services':
+
+    ```
+    emulationstation:
+      image: blackoutsecure/docker-emulationstation-de:latest
+      restart: unless-stopped
+      environment:
+        - TZ=Etc/UTC
+        - DISPLAY=:0
+        - ESDE_ARGS=
+        # - APP_USER=abc        # Optional: container user (default: abc)
+        # - ESDE_HOME=/config   # Optional: ES-DE home directory
+      volumes:
+        - '/path/to/config:/config'
+        - '/path/to/roms:/roms'
+        - '/path/to/bios:/bios'
+        - '/tmp/.X11-unix:/tmp/.X11-unix:ro'
+      devices:
+        - '/dev/dri:/dev/dri'
+        - '/dev/input:/dev/input'
+        - '/dev/uinput:/dev/uinput'
+        - '/dev/bus/usb:/dev/bus/usb'
+    ```
+
+  Docker Hub image namespace: blackoutsecure
+
+  Repository: https://github.com/blackoutsecure/docker-emulationstation-de
+  Upstream application: https://gitlab.com/es-de/emulationstation-de
+
+version: 3.4.0
+type: sw.block
+assets:
+  repository:
+    type: blob.asset
+    data:
+      url: 'https://github.com/blackoutsecure/docker-emulationstation-de'
+  logo:
+    type: blob.asset
+    data:
+      url: 'https://raw.githubusercontent.com/blackoutsecure/docker-emulationstation-de/main/logo.png'
+data:
+  defaultDeviceType: raspberrypi4-64
+  supportedDeviceTypes:
+    - genericx86-64-ext
+    - intel-nuc
+    - raspberrypi4-64
+    - raspberrypi400-64

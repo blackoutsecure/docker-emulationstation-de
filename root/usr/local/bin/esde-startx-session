@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+display_num="${DISPLAY_NUM:-0}"
+export DISPLAY="${DISPLAY:-:${display_num}}"
+
+if [[ -z ${XDG_RUNTIME_DIR:-} ]]; then
+  export XDG_RUNTIME_DIR=/run/esde
+fi
+
+export XAUTHORITY="${XAUTHORITY:-${XDG_RUNTIME_DIR}/.Xauthority}"
+
+mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
+chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${XDG_RUNTIME_DIR}"
+
+# startx/xauth may recreate the Xauthority file as root; fix ownership
+# so the non-root app user can read the cookie when we drop privileges.
+if [[ "$(id -u)" = "0" && -f "${XAUTHORITY}" ]]; then
+  chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${XAUTHORITY}"
+fi
+
+# Disable screen blanking and power saving
+xset s off -dpms 2>/dev/null || true
+
+esde_home="${ESDE_HOME:-/config}"
+read -r -a extra_args <<< "${ESDE_ARGS:-}"
+
+# Drop to non-root user for application execution without shell-quoted argv.
+if [[ "$(id -u)" = "0" ]]; then
+  if command -v s6-setuidgid >/dev/null 2>&1; then
+    exec s6-setuidgid "${APP_USER:-abc}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+  elif command -v runuser >/dev/null 2>&1; then
+    exec runuser -u "${APP_USER:-abc}" -- /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+  else
+    echo "[esde-startx-session] Error: no user-switch helper found (s6-setuidgid/runuser)." >&2
+    exit 1
+  fi
+else
+  exec /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+fi

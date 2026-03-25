@@ -1,0 +1,118 @@
+name: Monitor Upstream ES-DE Releases
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Dispatch publish workflow even if upstream metadata is unchanged'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
+  TRACK_FILE: .github/upstream/latest_release.json
+  TARGET_WORKFLOW: dockerhub-publish.yml
+  GIT_CONFIG_USER_NAME: github-actions[bot]
+  GIT_CONFIG_USER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch upstream release metadata and detect changes
+        id: check
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$(dirname "${TRACK_FILE}")"
+          curl -fsSL "${UPSTREAM_RELEASE_JSON_URL}" | jq -S . > /tmp/upstream-latest-release.json
+
+          stable_version="$(jq -r '.stable.version // ""' /tmp/upstream-latest-release.json)"
+          stable_release="$(jq -r '.stable.release // ""' /tmp/upstream-latest-release.json)"
+          stable_date="$(jq -r '.stable.date // ""' /tmp/upstream-latest-release.json)"
+
+          echo "stable_version=${stable_version}" >> "$GITHUB_OUTPUT"
+          echo "stable_release=${stable_release}" >> "$GITHUB_OUTPUT"
+          echo "stable_date=${stable_date}" >> "$GITHUB_OUTPUT"
+
+          if [ -f "${TRACK_FILE}" ]; then
+            jq -S . "${TRACK_FILE}" > /tmp/tracked-latest-release.json
+            if cmp -s /tmp/tracked-latest-release.json /tmp/upstream-latest-release.json; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update tracked release metadata file
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          cp /tmp/upstream-latest-release.json "${TRACK_FILE}"
+
+      - name: Commit tracked metadata changes
+        if: steps.check.outputs.changed == 'true'
+        env:
+          STABLE_VERSION: ${{ steps.check.outputs.stable_version }}
+          STABLE_RELEASE: ${{ steps.check.outputs.stable_release }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "${GIT_CONFIG_USER_NAME}"
+          git config user.email "${GIT_CONFIG_USER_EMAIL}"
+          git add "${TRACK_FILE}"
+
+          if git diff --cached --quiet; then
+            echo "No tracked metadata changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore(ci): track ES-DE latest_release.json ${STABLE_VERSION}-${STABLE_RELEASE}"
+
+      - name: Push tracked metadata commit
+        if: steps.check.outputs.changed == 'true'
+        run: git push
+
+      - name: Trigger Docker publish workflow
+        if: steps.check.outputs.changed == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/actions/workflows/${TARGET_WORKFLOW}/dispatches" \
+            -d "{\"ref\":\"${DEFAULT_BRANCH}\",\"inputs\":{\"publish\":\"true\",\"channel\":\"stable\"}}"
+
+      - name: Publish monitor summary
+        run: |
+          {
+            echo "## Upstream ES-DE Monitor"
+            echo ""
+            echo "- Changed: ${{ steps.check.outputs.changed }}"
+            echo "- Stable version: ${{ steps.check.outputs.stable_version }}"
+            echo "- Stable release: ${{ steps.check.outputs.stable_release }}"
+            echo "- Stable date: ${{ steps.check.outputs.stable_date }}"
+            echo "- Source: ${UPSTREAM_RELEASE_JSON_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

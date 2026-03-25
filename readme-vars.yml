@@ -1,0 +1,103 @@
+---
+# project information
+project_name: emulationstation-de
+project_url: "https://gitlab.com/es-de/emulationstation-de"
+project_logo: "https://raw.githubusercontent.com/blackoutsecure/docker-emulationstation-de/main/logo.png"
+project_blurb: "[ES-DE Frontend]({{ project_url }}) is an EmulationStation-derived frontend for browsing ROM libraries and launching emulators. This image is an unofficial community container built in a LinuxServer.io-style pattern, with Debian, hardened runtime defaults, local-display support, and optional Balena publishing. Sponsored and maintained by Blackout Secure (https://blackoutsecure.app)."
+project_lsio_github_repo_url: "https://github.com/blackoutsecure/docker-emulationstation-de"
+project_categories: "Emulation,Games,Desktop,Media"
+
+# supported architectures
+available_architectures:
+  - {arch: "{{ arch_x86_64 }}", tag: "latest-amd64"}
+  - {arch: "{{ arch_arm64 }}", tag: "latest-arm64"}
+
+# common parameters
+common_param_env_vars_enabled: true
+param_container_name: "emulationstation"
+param_usage_include_vols: true
+param_volumes:
+  - {vol_path: "/config", vol_host_path: "/path/to/config", desc: "ES-DE settings, themes, gamelists, and scraped media"}
+  - {vol_path: "/roms", vol_host_path: "/path/to/roms", desc: "ROM library mount"}
+  - {vol_path: "/bios", vol_host_path: "/path/to/bios", desc: "BIOS files for external emulator setups"}
+  - {vol_path: "/tmp/.X11-unix", vol_host_path: "/tmp/.X11-unix", desc: "Host X11 socket for local display"}
+
+param_usage_include_net: false
+param_usage_include_env: true
+param_env_vars:
+  - {env_var: "TZ", env_value: "Etc/UTC", desc: "Timezone"}
+  - {env_var: "DISPLAY", env_value: ":0", desc: "Host X11 display"}
+  - {env_var: "ESDE_ARGS", env_value: "", desc: "Extra command line flags appended to `es-de --home /config`"}
+  - {env_var: "APP_USER", env_value: "abc", desc: "Container user for ES-DE process execution (default: `abc`; LinuxServer.io standard)"}
+  - {env_var: "ESDE_HOME", env_value: "/config", desc: "ES-DE home directory for configuration and persistent data"}
+
+# optional env variables
+opt_param_usage_include_env: true
+opt_param_env_vars:
+  - {env_var: "NVIDIA_VISIBLE_DEVICES", env_value: "all", desc: "Enable all visible Nvidia GPUs when using the Nvidia runtime"}
+  - {env_var: "NVIDIA_DRIVER_CAPABILITIES", env_value: "all", desc: "Expose Nvidia driver capabilities for graphics workloads"}
+  - {env_var: "ESDE_GLES", env_value: "on", desc: "Build-time toggle for GLES-only systems when rebuilding the image"}
+
+# optional parameters
+optional_parameters: |
+  Common runtime hardening and passthrough options:
+
+  ```
+    --read-only
+    --security-opt no-new-privileges:true
+    --tmpfs /tmp:exec,nosuid,nodev,size=512m
+    --tmpfs /var/tmp:nosuid,nodev,size=256m
+    --tmpfs /run:exec,nosuid,nodev,size=64m
+    --shm-size=1gb
+  ```
+
+  Intel/AMD GPU and input passthrough:
+
+  ```
+    --device=/dev/dri:/dev/dri
+    --device=/dev/input:/dev/input
+  ```
+
+  Arcade and USB passthrough:
+
+  ```
+    --device=/dev/uinput:/dev/uinput
+    --device=/dev/bus/usb:/dev/bus/usb
+  ```
+
+  Nvidia runtime support in compose:
+
+  ```
+    gpus: all
+  ```
+
+# application setup block
+app_setup_block_enabled: true
+app_setup_block: |
+  This image is designed for local display environments and expects a running X server on the host.
+
+  **Required host integration**:
+  - Pass `DISPLAY` into the container
+  - Mount `/tmp/.X11-unix` into the container
+  - Permit local Docker access to the X server, for example with `xhost +local:docker`
+
+  **Persistent data**: ES-DE stores its application data under `/config/ES-DE/`.
+
+  **Device passthrough**: Add `/dev/dri`, `/dev/input`, `/dev/uinput`, and `/dev/bus/usb` as needed for your hardware.
+
+  **Build toggles**: When rebuilding locally, `ESDE_GLES`, `ESDE_DEINIT_ON_LAUNCH`, `ESDE_VIDEO_HW_DECODING`, and `ESDE_APPLICATION_UPDATER` are available as build arguments.
+
+  For upstream application details, see the [ES-DE project]({{ project_url }}).
+
+# hardware acceleration
+readme_hwaccel: false
+
+# read-only support
+readonly_supported: true
+readonly_message: |
+  Read-only operation is supported. Keep `/config` mounted and provide writable tmpfs mounts for `/tmp`, `/var/tmp`, and `/run`.
+
+# non-root support
+nonroot_supported: true
+nonroot_message: |
+  The container runs the application as the `abc` user via the LinuxServer.io base image conventions.

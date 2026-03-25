@@ -1,0 +1,38 @@
+---
+services:
+  emulationstation:
+    image: blackoutsecure/docker-emulationstation-de:latest
+    container_name: emulationstation
+    read_only: false
+    environment:
+      - TZ=Etc/UTC
+      - DISPLAY=:0
+      - XDG_RUNTIME_DIR=/run/esde
+      - ESDE_ARGS=
+      # - PULSE_SINK=           # Optional: PulseAudio sink name for USB audio (run: pactl list short sinks)
+    volumes:
+      - emulationstation-config:/config
+      - emulationstation-roms:/roms:ro
+      - emulationstation-bios:/bios:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/tmp:nosuid,nodev
+      - /run:exec,nosuid,nodev
+    shm_size: "1gb"
+    restart: unless-stopped
+
+volumes:
+  emulationstation-config:
+  emulationstation-roms:
+  emulationstation-bios:

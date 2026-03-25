@@ -1,0 +1,40 @@
+version: '2.4'
+
+services:
+  emulationstation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emulationstation
+    environment:
+      TZ: Etc/UTC
+      DISPLAY_NUM: '0'
+      XDG_RUNTIME_DIR: /run/esde
+      ESDE_USE_INTERNAL_X: '1'
+      ESDE_ARGS: ''
+    volumes:
+      - emulationstation-config:/config
+      - emulationstation-roms:/roms
+      - emulationstation-bios:/bios
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+      - /dev/uinput:/dev/uinput
+      - /dev/bus/usb:/dev/bus/usb
+      - /dev/snd:/dev/snd
+    labels:
+      io.balena.features.kernel-modules: '1'
+      io.balena.features.firmware: '1'
+      io.balena.features.dbus: '1'
+    privileged: true
+    tmpfs:
+      - /var/tmp
+      - /run:exec
+    shm_size: 1gb
+    read_only: false
+    restart: unless-stopped
+
+volumes:
+  emulationstation-config:
+  emulationstation-roms:
+  emulationstation-bios:

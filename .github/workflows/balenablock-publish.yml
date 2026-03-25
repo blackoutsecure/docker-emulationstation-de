@@ -1,0 +1,202 @@
+name: Publish Balena block release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - balena-compose.yml
+      - balena.yml
+      - .dockerignore
+      - root/**
+      - .github/workflows/balenablock-publish.yml
+      - .github/workflows/balenafleet-deploy.yml
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Release channel'
+        required: false
+        type: choice
+        options:
+          - stable
+          - dev
+        default: stable
+      publish_balena:
+        description: 'Publish to Balena fleet (uncheck to build-only)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BALENA_NAMESPACE: ${{ vars.BALENA_NAMESPACE || secrets.BALENA_USERNAME }}
+  BALENA_BLOCK_RELEASE: docker-emulationstation-de
+  UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
+  UPSTREAM_RELEASE_API_URL: https://gitlab.com/api/v4/projects/es-de%2Femulationstation-de/releases/permalink/latest
+  UPSTREAM_GIT_URL: https://gitlab.com/es-de/emulationstation-de.git
+
+jobs:
+  balena:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream ES-DE version for channel
+        id: upstream
+        run: |
+          set -euo pipefail
+
+          CHANNEL="${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'stable' }}"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHORT_SHA="${GITHUB_SHA::12}"
+
+          if [ "${CHANNEL}" = "stable" ]; then
+            RELEASE_META_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_JSON_URL}")"
+            RELEASE_TAG="$(echo "${RELEASE_META_JSON}" | jq -r '.stable.version // empty')"
+
+            if [ -z "${RELEASE_TAG}" ]; then
+              RELEASE_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_API_URL}")"
+              RELEASE_TAG="$(echo "${RELEASE_JSON}" | jq -r '.tag_name')"
+            fi
+
+            if [ -z "${RELEASE_TAG}" ] || [ "${RELEASE_TAG}" = "null" ]; then
+              echo "Failed to resolve latest ES-DE stable release tag"
+              exit 1
+            fi
+
+            if git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+              ESDE_BUILD_REF="${RELEASE_TAG}"
+            elif git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/v${RELEASE_TAG}" >/dev/null 2>&1; then
+              ESDE_BUILD_REF="v${RELEASE_TAG}"
+            else
+              ESDE_BUILD_REF="${RELEASE_TAG}"
+            fi
+
+            ESDE_VERSION="${ESDE_BUILD_REF}"
+            BALENA_VERSION="${RELEASE_TAG}"
+            VERSION_LABEL="stable-${RELEASE_TAG}"
+            ESDE_CMAKE_BUILD_TYPE="Release"
+            ESDE_STRIP_BINARIES="1"
+          else
+            ESDE_VERSION="master"
+            BALENA_VERSION="0.0.0-dev.${SHORT_SHA}"
+            VERSION_LABEL="dev-master-${SHORT_SHA}"
+            ESDE_CMAKE_BUILD_TYPE="RelWithDebInfo"
+            ESDE_STRIP_BINARIES="0"
+          fi
+
+          {
+            echo "channel=${CHANNEL}"
+            echo "esde_version=${ESDE_VERSION}"
+            echo "balena_version=${BALENA_VERSION}"
+            echo "version_label=${VERSION_LABEL}"
+            echo "esde_cmake_build_type=${ESDE_CMAKE_BUILD_TYPE}"
+            echo "esde_strip_binaries=${ESDE_STRIP_BINARIES}"
+            echo "build_date=${BUILD_DATE}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved ES-DE ${CHANNEL} version: ${ESDE_VERSION}"
+
+      - name: Update balena.yml with resolved version
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.upstream.outputs.balena_version }}"
+          CHANNEL="${{ steps.upstream.outputs.channel }}"
+          VERSION_LABEL="${{ steps.upstream.outputs.version_label }}"
+          echo "Updating balena.yml version to: ${VERSION} (channel: ${CHANNEL}, label: ${VERSION_LABEL})"
+          sed -i -E "s/^version: .*/version: ${VERSION}/" balena.yml
+          grep "^version:" balena.yml
+
+      - name: Persist balena.yml version
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.upstream.outputs.balena_version }}"
+
+          if git diff --quiet -- balena.yml; then
+            echo "balena.yml already matches ${VERSION}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add balena.yml
+          git commit -m "chore: sync balena block version to ${VERSION}"
+          git push
+
+      - name: Prepare Balena source context
+        run: |
+          set -euo pipefail
+          rm -rf .balena-source
+          mkdir -p .balena-source
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.balena-source' \
+            ./ .balena-source/
+          cp .balena-source/balena-compose.yml .balena-source/docker-compose.yml
+          echo "Using balena-compose.yml for block deployment"
+          grep "^version:" .balena-source/balena.yml
+
+      - name: Resolve Balena publish target
+        id: targets
+        run: |
+          set -euo pipefail
+
+          BLOCK_FLEET="${BALENA_NAMESPACE}/${BALENA_BLOCK_RELEASE}"
+
+          {
+            echo "block_fleet=${BLOCK_FLEET}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish Balena block release
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_balena == true)
+        id: balena-deploy
+        uses: balena-io/deploy-to-balena-action@master
+        with:
+          balena_token: ${{ secrets.BALENA_API_TOKEN }}
+          fleet: ${{ steps.targets.outputs.block_fleet }}
+          cache: false
+          layer_cache: false
+          debug: false
+          source: ./.balena-source
+
+      - name: Install Balena CLI for manual publish
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_balena == false
+        run: npm install -g balena-cli
+
+      - name: Publish Balena block release manually (build-only or test)
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_balena == false
+        id: balena-deploy-manual
+        env:
+          BALENA_TOKEN: ${{ secrets.BALENA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          balena login --token "${BALENA_TOKEN}"
+          balena push "${{ steps.targets.outputs.block_fleet }}" \
+            --source ./.balena-source \
+            --nocache \
+            --release-tag balena-ci-commit-sha "${GITHUB_SHA}"
+          RELEASE_ID=$(balena release list "${{ steps.targets.outputs.block_fleet }}" --json | jq -r '.[0].id')
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Log deployment info
+        run: |
+          echo "Channel: ${{ steps.upstream.outputs.channel }}"
+          echo "Published block release slug: ${{ steps.targets.outputs.block_fleet }}"
+          echo "Balena version (semver): ${{ steps.upstream.outputs.balena_version }}"
+          echo "Version label (descriptive): ${{ steps.upstream.outputs.version_label }}"
+          echo "ES-DE version: ${{ steps.upstream.outputs.esde_version }}"
+          echo "Build type: ${{ steps.upstream.outputs.esde_cmake_build_type }}"
+          echo "Strip binaries: ${{ steps.upstream.outputs.esde_strip_binaries }}"
+          echo "Build date: ${{ steps.upstream.outputs.build_date }}"

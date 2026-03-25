@@ -1,0 +1,117 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+
+display_num="${DISPLAY_NUM:-0}"
+export DISPLAY="${DISPLAY:-:${display_num}}"
+
+if [[ -z ${XDG_RUNTIME_DIR:-} ]]; then
+  echo "[svc-esde] Warning: XDG_RUNTIME_DIR not set. Setting to /run/esde" >&2
+  export XDG_RUNTIME_DIR=/run/esde
+fi
+
+mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
+chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${XDG_RUNTIME_DIR}"
+
+# --- Audio detection and setup ---
+# ES-DE requires PulseAudio or PipeWire; raw ALSA is not supported.
+
+# 1. Detect ALSA hardware (sound cards visible to the kernel)
+if [[ -d /dev/snd ]]; then
+  snd_devices="$(ls /dev/snd/ 2>/dev/null)" || true
+  if [[ -n "${snd_devices}" ]]; then
+    echo "[svc-esde] Audio hardware detected in /dev/snd: $(echo "${snd_devices}" | tr '\n' ' ')"
+  else
+    echo "[svc-esde] Warning: /dev/snd exists but contains no device nodes." >&2
+  fi
+  if [[ -r /proc/asound/cards ]]; then
+    while IFS= read -r line; do
+      echo "[svc-esde]   ALSA card: ${line}"
+    done < /proc/asound/cards
+  fi
+else
+  echo "[svc-esde] Warning: /dev/snd not found. No sound devices available." >&2
+  echo "[svc-esde]   For USB audio: pass --device /dev/snd:/dev/snd or use privileged mode." >&2
+fi
+
+# 2. Start PulseAudio
+if command -v pulseaudio >/dev/null 2>&1; then
+  if ! s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    s6-setuidgid "${APP_USER:-abc}" pulseaudio --start --exit-idle-time=-1 --daemonize=yes 2>/dev/null || \
+      echo "[svc-esde] Warning: PulseAudio failed to start. Audio may be unavailable." >&2
+  fi
+
+  # 3. Configure default sink (wait briefly for PulseAudio to discover devices)
+  if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    sleep 1
+
+    # Log all discovered sinks for troubleshooting
+    sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
+    if [[ -n "${sink_list}" ]]; then
+      echo "[svc-esde] PulseAudio sinks available:"
+      while IFS= read -r sink_line; do
+        echo "[svc-esde]   ${sink_line}"
+      done <<< "${sink_list}"
+    else
+      echo "[svc-esde] Warning: PulseAudio running but no sinks detected." >&2
+    fi
+
+    # Set explicit sink if PULSE_SINK is defined, otherwise auto-select the first one
+    if [[ -n "${PULSE_SINK:-}" ]]; then
+      s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${PULSE_SINK}" 2>/dev/null && \
+        echo "[svc-esde] PulseAudio default sink set to: ${PULSE_SINK}" || \
+        echo "[svc-esde] Warning: Could not set PULSE_SINK=${PULSE_SINK}. Check sink names above." >&2
+    elif [[ -n "${sink_list}" ]]; then
+      default_sink="$(echo "${sink_list}" | head -1 | awk '{print $2}')" || true
+      if [[ -n "${default_sink:-}" ]]; then
+        s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${default_sink}" 2>/dev/null || true
+        echo "[svc-esde] PulseAudio auto-selected sink: ${default_sink}"
+      fi
+    fi
+  fi
+else
+  echo "[svc-esde] Warning: PulseAudio not installed. Audio will not work." >&2
+fi
+
+if [[ ! -e /dev/dri/renderD128 && ! -e /dev/dri/card0 ]]; then
+  echo "[svc-esde] Warning: No /dev/dri render/card node detected. Hardware GL may be unavailable." >&2
+fi
+
+esde_home="${ESDE_HOME:-/config}"
+read -r -a extra_args <<< "${ESDE_ARGS:-}"
+
+echo "[svc-esde] Starting ES-DE with DISPLAY=${DISPLAY}, XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}, and home=${esde_home}"
+echo "[svc-esde] Launch target is local device graphics output; no web console or HTTP port is exposed by this image."
+
+if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
+  echo "[svc-esde] Starting internal Xorg session via startx (as root for VT management)."
+  sed -i -e 's/console/anybody/g' /etc/X11/Xwrapper.config || true
+  if ! grep -q '^needs_root_rights=yes$' /etc/X11/Xwrapper.config 2>/dev/null; then
+    echo 'needs_root_rights=yes' >> /etc/X11/Xwrapper.config
+  fi
+  export XAUTHORITY="${XAUTHORITY:-${XDG_RUNTIME_DIR}/.Xauthority}"
+  touch "${XAUTHORITY}"
+  chmod 600 "${XAUTHORITY}"
+  chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${XAUTHORITY}"
+  if command -v mcookie >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1; then
+    cookie="$(mcookie)"
+    xauth -f "${XAUTHORITY}" remove "${DISPLAY}" >/dev/null 2>&1 || true
+    xauth -f "${XAUTHORITY}" add "${DISPLAY}" . "${cookie}" >/dev/null 2>&1 || true
+  fi
+  startx_server_args=("${DISPLAY}" -novtswitch -keeptty -nocursor -auth "${XAUTHORITY}")
+  if [[ "${ESDE_XORG_VERBOSE:-0}" = "1" ]]; then
+    startx_server_args+=( -verbose 3 )
+  fi
+  exec startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}"
+fi
+
+if [[ ! -S /tmp/.X11-unix/X${DISPLAY#:} ]]; then
+  echo "[svc-esde] X11 socket /tmp/.X11-unix/X${DISPLAY#:} is not available. Mount /tmp/.X11-unix from the host or set ESDE_USE_INTERNAL_X=1." >&2
+  sleep infinity
+fi
+
+if [[ -z ${LSIO_NON_ROOT_USER:-} ]]; then
+  exec s6-setuidgid "${APP_USER}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+else
+  exec /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+fi
