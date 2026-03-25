@@ -159,8 +159,8 @@ jobs:
             echo "block_fleet=${BLOCK_FLEET}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Publish Balena block release
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_balena == true)
+      - name: Publish Balena block release (push)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: balena-deploy
         uses: balena-io/deploy-to-balena-action@master
         with:
@@ -171,12 +171,12 @@ jobs:
           debug: false
           source: ./.balena-source
 
-      - name: Install Balena CLI for manual publish
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_balena == false
+      - name: Install Balena CLI
+        if: github.event_name == 'workflow_dispatch'
         run: npm install -g balena-cli
 
-      - name: Publish Balena block release manually (build-only or test)
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_balena == false
+      - name: Publish Balena block release (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
         id: balena-deploy-manual
         env:
           BALENA_TOKEN: ${{ secrets.BALENA_API_TOKEN }}
