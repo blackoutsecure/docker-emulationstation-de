@@ -47,7 +47,7 @@ env:
   REGISTRY: docker.io
   BASE_IMAGE_REGISTRY: ghcr.io
   DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
-  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_NAME: emulationstation-de
   REPO_URL: ${{ github.server_url }}/${{ github.repository }}
   DOCKERFILE_PATH: ./Dockerfile
   UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json

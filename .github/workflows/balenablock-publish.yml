@@ -37,7 +37,7 @@ concurrency:
 
 env:
   BALENA_NAMESPACE: ${{ vars.BALENA_NAMESPACE || secrets.BALENA_USERNAME }}
-  BALENA_BLOCK_RELEASE: docker-emulationstation-de
+  BALENA_BLOCK_RELEASE: emulationstation-de
   UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
   UPSTREAM_RELEASE_API_URL: https://gitlab.com/api/v4/projects/es-de%2Femulationstation-de/releases/permalink/latest
   UPSTREAM_GIT_URL: https://gitlab.com/es-de/emulationstation-de.git
