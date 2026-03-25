@@ -11,7 +11,6 @@ services:
       DISPLAY_NUM: '0'
       XDG_RUNTIME_DIR: /run/esde
       ESDE_USE_INTERNAL_X: '1'
-      ESDE_ARGS: ''
     volumes:
       - emulationstation-config:/config
       - emulationstation-roms:/roms
