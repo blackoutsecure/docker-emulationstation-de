@@ -2,7 +2,9 @@ version: '2.4'
 
 services:
   emulationstation:
-    image: blackoutsecure/docker-emulationstation-de:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: emulationstation
     environment:
       TZ: Etc/UTC
@@ -29,5 +31,8 @@ services:
 
 volumes:
   emulationstation-config:
+    driver: local
   emulationstation-roms:
+    driver: local
   emulationstation-bios:
+    driver: local
