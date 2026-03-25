@@ -46,7 +46,7 @@ concurrency:
 env:
   REGISTRY: docker.io
   BASE_IMAGE_REGISTRY: ghcr.io
-  DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
   IMAGE_NAME: emulationstation-de
   REPO_URL: ${{ github.server_url }}/${{ github.repository }}
   DOCKERFILE_PATH: ./Dockerfile
@@ -286,7 +286,7 @@ jobs:
     timeout-minutes: 30
     env:
       REGISTRY: docker.io
-      DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
       IMAGE_NAME: emulationstation-de
       DISPATCH_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'all' }}
     steps:
