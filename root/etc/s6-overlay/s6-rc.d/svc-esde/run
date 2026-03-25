@@ -83,8 +83,40 @@ read -r -a extra_args <<< "${ESDE_ARGS:-}"
 echo "[svc-esde] Starting ES-DE with DISPLAY=${DISPLAY}, XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}, and home=${esde_home}"
 echo "[svc-esde] Launch target is local device graphics output; no web console or HTTP port is exposed by this image."
 
+# --- udev setup for input device discovery (keyboard, mouse, gamepad) ---
+# Non-balena base images do not auto-start udev; we must do it ourselves.
+# Without a running udevd, Xorg cannot hotplug-discover input devices.
+# In balena, io.balena.features.dbus mounts the socket at /run/dbus/system_bus_socket
+# and sets DBUS_SYSTEM_BUS_ADDRESS automatically. For non-balena, detect if available.
+if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
+  if [[ -S /run/dbus/system_bus_socket ]]; then
+    export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+  fi
+fi
+
+if ! pidof systemd-udevd >/dev/null 2>&1 && ! pidof udevd >/dev/null 2>&1; then
+  if [[ -x /usr/lib/systemd/systemd-udevd ]]; then
+    echo "[svc-esde] Starting udevd for input device discovery."
+    /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
+    udevadm trigger --action=add 2>/dev/null || true
+    udevadm settle --timeout=5 2>/dev/null || true
+  elif command -v udevd >/dev/null 2>&1; then
+    echo "[svc-esde] Starting udevd for input device discovery."
+    udevd --daemon 2>/dev/null || true
+    udevadm trigger --action=add 2>/dev/null || true
+    udevadm settle --timeout=5 2>/dev/null || true
+  else
+    echo "[svc-esde] Warning: udevd not found. Keyboard/mouse may not work in X." >&2
+  fi
+fi
+
 if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
   echo "[svc-esde] Starting internal Xorg session via startx (as root for VT management)."
+
+  # Clean stale X lock/socket files from a previous crash to prevent startx failure
+  rm -f "/tmp/.X${display_num}-lock" 2>/dev/null || true
+  rm -f "/tmp/.X11-unix/X${display_num}" 2>/dev/null || true
+
   sed -i -e 's/console/anybody/g' /etc/X11/Xwrapper.config || true
   if ! grep -q '^needs_root_rights=yes$' /etc/X11/Xwrapper.config 2>/dev/null; then
     echo 'needs_root_rights=yes' >> /etc/X11/Xwrapper.config
@@ -98,7 +130,7 @@ if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
     xauth -f "${XAUTHORITY}" remove "${DISPLAY}" >/dev/null 2>&1 || true
     xauth -f "${XAUTHORITY}" add "${DISPLAY}" . "${cookie}" >/dev/null 2>&1 || true
   fi
-  startx_server_args=("${DISPLAY}" -novtswitch -keeptty -nocursor -auth "${XAUTHORITY}")
+  startx_server_args=("${DISPLAY}" -nolisten tcp -novtswitch -keeptty -nocursor -auth "${XAUTHORITY}")
   if [[ "${ESDE_XORG_VERBOSE:-0}" = "1" ]]; then
     startx_server_args+=( -verbose 3 )
   fi

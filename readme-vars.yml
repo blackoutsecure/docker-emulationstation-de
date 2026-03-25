@@ -20,13 +20,15 @@ param_volumes:
   - {vol_path: "/config", vol_host_path: "/path/to/config", desc: "ES-DE settings, themes, gamelists, and scraped media"}
   - {vol_path: "/roms", vol_host_path: "/path/to/roms", desc: "ROM library mount"}
   - {vol_path: "/bios", vol_host_path: "/path/to/bios", desc: "BIOS files for external emulator setups"}
-  - {vol_path: "/tmp/.X11-unix", vol_host_path: "/tmp/.X11-unix", desc: "Host X11 socket for local display"}
+  - {vol_path: "/tmp/.X11-unix", vol_host_path: "/tmp/.X11-unix", desc: "Host X11 socket (only needed when ESDE_USE_INTERNAL_X=0)"}
 
 param_usage_include_net: false
 param_usage_include_env: true
 param_env_vars:
   - {env_var: "TZ", env_value: "Etc/UTC", desc: "Timezone"}
-  - {env_var: "DISPLAY", env_value: ":0", desc: "Host X11 display"}
+  - {env_var: "DISPLAY_NUM", env_value: "0", desc: "X11 display number (used when ESDE_USE_INTERNAL_X=1)"}
+  - {env_var: "ESDE_USE_INTERNAL_X", env_value: "1", desc: "Start an internal Xorg server via startx (set to `1` for headless/balena; `0` to use an external X11 socket)"}
+  - {env_var: "UDEV", env_value: "1", desc: "Enable udev for input device discovery (keyboard, mouse, gamepad)"}
   - {env_var: "ESDE_ARGS", env_value: "", desc: "Extra command line flags appended to `es-de --home /config`"}
   - {env_var: "APP_USER", env_value: "abc", desc: "Container user for ES-DE process execution (default: `abc`; LinuxServer.io standard)"}
   - {env_var: "ESDE_HOME", env_value: "/config", desc: "ES-DE home directory for configuration and persistent data"}
@@ -74,16 +76,17 @@ optional_parameters: |
 # application setup block
 app_setup_block_enabled: true
 app_setup_block: |
-  This image is designed for local display environments and expects a running X server on the host.
+  This image supports two display modes:
 
-  **Required host integration**:
-  - Pass `DISPLAY` into the container
-  - Mount `/tmp/.X11-unix` into the container
-  - Permit local Docker access to the X server, for example with `xhost +local:docker`
+  **Internal X server (default):** Set `ESDE_USE_INTERNAL_X=1`. The container starts its own Xorg server — no host display server is required. This is the recommended mode for kiosk, cabinet, HTPC, and Balena deployments.
+
+  **External host X server:** Set `ESDE_USE_INTERNAL_X=0`, pass `DISPLAY`, and mount `/tmp/.X11-unix` from the host. Allow the local Docker client to access the X server with `xhost +local:docker`.
 
   **Persistent data**: ES-DE stores its application data under `/config/ES-DE/`.
 
-  **Device passthrough**: Add `/dev/dri`, `/dev/input`, `/dev/uinput`, and `/dev/bus/usb` as needed for your hardware.
+  **Device passthrough**: Add `/dev/dri`, `/dev/input`, `/dev/uinput`, `/dev/snd`, and `/dev/bus/usb` as needed for your hardware.
+
+  **Input devices**: Set `UDEV=1` (default) and run privileged for keyboard/mouse/gamepad discovery.
 
   **Build toggles**: When rebuilding locally, `ESDE_GLES`, `ESDE_DEINIT_ON_LAUNCH`, `ESDE_VIDEO_HW_DECODING`, and `ESDE_APPLICATION_UPDATER` are available as build arguments.
 

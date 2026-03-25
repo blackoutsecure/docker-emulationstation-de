@@ -73,27 +73,30 @@ Quick links:
 
 ## Quick Start
 
-**5-minute local X11 setup:**
+**5-minute standalone setup (internal X server — no host X required):**
 
 ```bash
-xhost +local:docker
 docker compose up -d
 ```
 
-If your host display is not `:0`, update [docker-compose.yml](docker-compose.yml) before starting.
+The default [docker-compose.yml](docker-compose.yml) starts its own Xorg server inside the container (`ESDE_USE_INTERNAL_X=1`), so no host display server is needed. This is ideal for kiosk, cabinet, HTPC, and Balena deployments.
 
-This image assumes:
-
-- a running X server on the host
-- `DISPLAY` passed into the container
-- `/tmp/.X11-unix` mounted into the container
+**Alternative: use an existing host X server:**
 
 ```bash
-# Pull latest
-docker pull blackoutsecure/emulationstation-de
-
-# Pull specific version
-docker pull blackoutsecure/emulationstation-de:latest-dev
+xhost +local:docker
+docker run -d \
+  --name=emulationstation \
+  -e TZ=Etc/UTC \
+  -e DISPLAY=:0 \
+  -v /path/to/config:/config \
+  -v /path/to/roms:/roms:ro \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+  --device=/dev/dri:/dev/dri \
+  --device=/dev/input:/dev/input \
+  --shm-size=1gb \
+  --restart unless-stopped \
+  blackoutsecure/emulationstation-de:latest
 ```
 
 For compose examples, device passthrough, Balena deployment, and local build options, see [Usage](#usage) below.
@@ -127,7 +130,7 @@ docker pull blackoutsecure/emulationstation-de:latest-arm64
 
 [ES-DE Frontend](https://gitlab.com/es-de/emulationstation-de) is an EmulationStation-derived frontend used to browse ROM libraries, present metadata and media, and launch external emulators from a controller-friendly interface.
 
-This container packages ES-DE for direct local-display environments rather than browser delivery. The runtime is tuned around X11 socket mounting, writable config persistence, and optional passthrough for GPU, input, and USB devices.
+This container packages ES-DE for direct local-display environments. The default mode starts an internal Xorg server inside the container, requiring no host display server. Alternatively, it can connect to an existing host X11 server via socket mounting. The runtime supports writable config persistence and optional passthrough for GPU, input, audio, and USB devices.
 
 Upstream project details:
 
@@ -156,24 +159,58 @@ The architectures supported by this image are:
 
 ### Docker Compose (recommended, [click here for more info](https://docs.linuxserver.io/general/docker-compose))
 
+**Standalone (internal X server — recommended for dedicated devices):**
+
 ```yaml
 ---
 services:
   emulationstation:
     image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
-    read_only: false
+    environment:
+      - TZ=Etc/UTC
+      - DISPLAY_NUM=0
+      - XDG_RUNTIME_DIR=/run/esde
+      - ESDE_USE_INTERNAL_X=1
+      - UDEV=1
+    volumes:
+      - /path/to/config:/config
+      - /path/to/roms:/roms:ro
+      - /path/to/bios:/bios:ro
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+      - /dev/uinput:/dev/uinput
+      - /dev/snd:/dev/snd
+    privileged: true
+    tmpfs:
+      - /var/tmp
+      - /run:exec
+    shm_size: 1gb
+    restart: unless-stopped
+```
+
+**Using an existing host X server:**
+
+```yaml
+---
+services:
+  emulationstation:
+    image: blackoutsecure/emulationstation-de:latest
+    container_name: emulationstation
     environment:
       - TZ=Etc/UTC
       - DISPLAY=:0
-      - ESDE_ARGS=
-      # - APP_USER=abc        # Optional: set to override the default container user (default: abc)
-      # - ESDE_HOME=/config   # Optional: set to override ES-DE home directory
+      - UDEV=1
     volumes:
       - /path/to/config:/config
       - /path/to/roms:/roms:ro
       - /path/to/bios:/bios:ro
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+    privileged: true
     security_opt:
       - no-new-privileges:true
     tmpfs:
@@ -194,27 +231,24 @@ services:
   emulationstation:
     image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
-    read_only: false
     environment:
       - TZ=Etc/UTC
-      - DISPLAY=:0
-      - ESDE_ARGS=
-      # - APP_USER=abc        # Optional: set to override the default container user (default: abc)
-      # - ESDE_HOME=/config   # Optional: set to override ES-DE home directory
+      - DISPLAY_NUM=0
+      - XDG_RUNTIME_DIR=/run/esde
+      - ESDE_USE_INTERNAL_X=1
+      - UDEV=1
     volumes:
       - /path/to/config:/config
       - /path/to/roms:/roms:ro
       - /path/to/bios:/bios:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
-    security_opt:
-      - no-new-privileges:true
+      - /dev/snd:/dev/snd
+    privileged: true
     tmpfs:
-      - /tmp:exec,nosuid,nodev,size=512m
-      - /var/tmp:nosuid,nodev,size=256m
-      - /run:exec,nosuid,nodev,size=64m
+      - /var/tmp
+      - /run:exec
     shm_size: 1gb
     restart: unless-stopped
 ```
@@ -227,29 +261,26 @@ services:
   emulationstation:
     image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
-    read_only: false
     environment:
       - TZ=Etc/UTC
-      - DISPLAY=:0
-      - ESDE_ARGS=
+      - DISPLAY_NUM=0
+      - XDG_RUNTIME_DIR=/run/esde
+      - ESDE_USE_INTERNAL_X=1
+      - UDEV=1
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      # - APP_USER=abc        # Optional: set to override the default container user (default: abc)
-      # - ESDE_HOME=/config   # Optional: set to override ES-DE home directory
     volumes:
       - /path/to/config:/config
       - /path/to/roms:/roms:ro
       - /path/to/bios:/bios:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
     gpus: all
     devices:
       - /dev/input:/dev/input
-    security_opt:
-      - no-new-privileges:true
+      - /dev/snd:/dev/snd
+    privileged: true
     tmpfs:
-      - /tmp:exec,nosuid,nodev,size=512m
-      - /var/tmp:nosuid,nodev,size=256m
-      - /run:exec,nosuid,nodev,size=64m
+      - /var/tmp
+      - /run:exec
     shm_size: 1gb
     restart: unless-stopped
 ```
@@ -262,64 +293,84 @@ services:
   emulationstation:
     image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
-    read_only: false
     environment:
       - TZ=Etc/UTC
-      - DISPLAY=:0
-      - ESDE_ARGS=
-      # - APP_USER=abc        # Optional: set to override the default container user (default: abc)
-      # - ESDE_HOME=/config   # Optional: set to override ES-DE home directory
+      - DISPLAY_NUM=0
+      - XDG_RUNTIME_DIR=/run/esde
+      - ESDE_USE_INTERNAL_X=1
+      - UDEV=1
     volumes:
       - /path/to/config:/config
       - /path/to/roms:/roms:ro
       - /path/to/bios:/bios:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
     devices:
+      - /dev/dri:/dev/dri
       - /dev/input:/dev/input
       - /dev/uinput:/dev/uinput
-      - /dev/dri:/dev/dri
       - /dev/bus/usb:/dev/bus/usb
-    security_opt:
-      - no-new-privileges:true
+      - /dev/snd:/dev/snd
+    privileged: true
     tmpfs:
-      - /tmp:exec,nosuid,nodev,size=512m
-      - /var/tmp:nosuid,nodev,size=256m
-      - /run:exec,nosuid,nodev,size=64m
+      - /var/tmp
+      - /run:exec
     shm_size: 1gb
     restart: unless-stopped
 ```
 
 ### Docker CLI ([click here for more info](https://docs.docker.com/engine/reference/commandline/cli/))
 
-Leave the root filesystem writable for LSIO init ownership setup. Do not add `--read-only` for this image.
+**Standalone (internal X server):**
 
 ```bash
 docker run -d \
   --name=emulationstation \
   --restart unless-stopped \
-  --security-opt no-new-privileges:true \
+  --privileged \
+  -e TZ=Etc/UTC \
+  -e DISPLAY_NUM=0 \
+  -e XDG_RUNTIME_DIR=/run/esde \
+  -e ESDE_USE_INTERNAL_X=1 \
+  -e UDEV=1 \
+  -v /path/to/config:/config \
+  -v /path/to/roms:/roms:ro \
+  -v /path/to/bios:/bios:ro \
+  --device=/dev/dri:/dev/dri \
+  --device=/dev/input:/dev/input \
+  --device=/dev/snd:/dev/snd \
+  --tmpfs /var/tmp \
+  --tmpfs /run:exec \
+  --shm-size=1gb \
+  blackoutsecure/emulationstation-de:latest
+```
+
+**Using an existing host X server:**
+
+```bash
+xhost +local:docker
+docker run -d \
+  --name=emulationstation \
+  --restart unless-stopped \
+  --privileged \
   -e TZ=Etc/UTC \
   -e DISPLAY=:0 \
-  -e ESDE_ARGS="" \
-  -e APP_USER=abc \
-  -e ESDE_HOME=/config \
+  -e UDEV=1 \
   -v /path/to/config:/config \
   -v /path/to/roms:/roms:ro \
   -v /path/to/bios:/bios:ro \
   -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
-  --tmpfs /tmp:exec,nosuid,nodev,size=512m \
-  --tmpfs /var/tmp:nosuid,nodev,size=256m \
-  --tmpfs /run:exec,nosuid,nodev,size=64m \
+  --device=/dev/dri:/dev/dri \
+  --device=/dev/input:/dev/input \
+  --device=/dev/snd:/dev/snd \
   --shm-size=1gb \
   blackoutsecure/emulationstation-de:latest
 ```
 
 ### Balena Deployment
 
-This image can also be deployed to Balena-powered devices using the included [balena-compose.yml](balena-compose.yml) file.
+This image can also be deployed to Balena-powered devices using the included [docker-compose.yml](docker-compose.yml) file (Balena labels are included and harmlessly ignored by standard Docker).
 
 - Block metadata: [balena.yml](balena.yml)
-- Balena deployment compose: [balena-compose.yml](balena-compose.yml)
+- Compose file: [docker-compose.yml](docker-compose.yml)
 - Publish workflow: [.github/workflows/balenablock-publish.yml](.github/workflows/balenablock-publish.yml)
 
 ```bash
@@ -350,7 +401,10 @@ For deployment via the web interface, use the deploy button in this repository. 
 | Parameter | Function | Required |
 | :----: | --- | :---: |
 | `-e TZ=Etc/UTC` | Timezone | Optional |
-| `-e DISPLAY=:0` | Host X11 display | Required |
+| `-e DISPLAY_NUM=0` | X11 display number (used with internal X server) | Optional |
+| `-e ESDE_USE_INTERNAL_X=1` | Start an internal Xorg server via startx (`1` for standalone/balena; `0` to use an external host X11 socket) | Optional |
+| `-e UDEV=1` | Enable udev for input device discovery (keyboard, mouse, gamepad) | Recommended |
+| `-e DISPLAY=:0` | Host X11 display (only needed when `ESDE_USE_INTERNAL_X=0`) | Conditional |
 | `-e ESDE_ARGS=` | Extra command line flags appended to `es-de --home /config` | Optional |
 | `-e APP_USER=abc` | Container user for ES-DE process execution (default: `abc`; LinuxServer.io standard) | Optional |
 | `-e ESDE_HOME=/config` | ES-DE home directory for configuration and persistent data | Optional |
@@ -362,7 +416,7 @@ For deployment via the web interface, use the deploy button in this repository. 
 | `-v /config` | ES-DE persistent settings, themes, gamelists, scraped media, and application state | Recommended |
 | `-v /roms` | ROM library mount | Recommended |
 | `-v /bios` | BIOS files for emulator backends that need them | Optional |
-| `-v /tmp/.X11-unix:/tmp/.X11-unix:ro` | X11 socket for local display | Required |
+| `-v /tmp/.X11-unix:/tmp/.X11-unix:ro` | X11 socket for local display (only needed when `ESDE_USE_INTERNAL_X=0`) | Conditional |
 
 ### Devices
 
@@ -372,6 +426,7 @@ For deployment via the web interface, use the deploy button in this repository. 
 | `--device=/dev/input:/dev/input` | Gamepad and input passthrough | Optional |
 | `--device=/dev/uinput:/dev/uinput` | Virtual input device support | Optional |
 | `--device=/dev/bus/usb:/dev/bus/usb` | USB passthrough for cabinet and peripheral workflows | Optional |
+| `--device=/dev/snd:/dev/snd` | Audio device passthrough | Optional |
 
 ### Runtime Security Defaults
 
@@ -410,19 +465,17 @@ The container expects persistent application data to live under `/config`, with 
 
 - Keep `/config` persistent so ES-DE metadata and preferences survive container recreation
 - Mount `/roms` and `/bios` read-only unless you have a specific reason to allow writes
-- Keep the X11 socket mount read-only and pair it with `DISPLAY`
+- When using external X mode (`ESDE_USE_INTERNAL_X=0`), keep the X11 socket mount read-only and pair it with `DISPLAY`
 
 ---
 
 ## Application Setup
 
-This image is designed for direct local display environments and expects a running X server on the host.
+This image supports two display modes:
 
-Required host integration:
+**Internal X server (default):** Set `ESDE_USE_INTERNAL_X=1` (the default in [docker-compose.yml](docker-compose.yml)). The container starts its own Xorg server — no host X server is required. This is the recommended mode for kiosk, cabinet, HTPC, and Balena deployments.
 
-- pass `DISPLAY` into the container
-- mount `/tmp/.X11-unix` into the container
-- allow the local Docker client to access the X server, for example with `xhost +local:docker`
+**External host X server:** Set `ESDE_USE_INTERNAL_X=0`, pass `DISPLAY`, and mount `/tmp/.X11-unix` from the host. Allow the local Docker client to access the X server with `xhost +local:docker`.
 
 Hardware passthrough guidance:
 
@@ -430,7 +483,9 @@ Hardware passthrough guidance:
 - add `/dev/input` for controller and input passthrough
 - add `/dev/uinput` for virtual input workflows
 - add `/dev/bus/usb` for cabinet and peripheral passthrough
+- add `/dev/snd` for audio device passthrough
 - use `gpus: all` plus the Nvidia environment variables when running with the Nvidia runtime
+- set `UDEV=1` (default) and ensure the container is privileged for keyboard/mouse/gamepad discovery
 
 ---
 
@@ -479,19 +534,28 @@ docker build \
 
 ### Display errors on startup
 
-- verify `DISPLAY`
+**Internal X server (`ESDE_USE_INTERNAL_X=1`):**
+- ensure the container is running with `privileged: true`
+- check container logs for Xorg errors (`ESDE_XORG_VERBOSE=1` enables verbose X logging)
+- verify `/dev/dri` is passed through for GPU access
+
+**External host X server (`ESDE_USE_INTERNAL_X=0`):**
+- verify `DISPLAY` matches your host display
 - verify `/tmp/.X11-unix` is mounted
-- ensure the host X server allows the container to connect
+- ensure the host X server allows the container to connect (`xhost +local:docker`)
 
 ### Input devices not detected
 
+- ensure `UDEV=1` is set (the default in [docker-compose.yml](docker-compose.yml)) — without udev, Xorg cannot discover keyboard, mouse, or gamepad devices
+- the container must run in privileged mode for udev to access `/dev/input` devices
 - use one of the hardware passthrough compose examples in this README
 - validate permissions for `/dev/input`, `/dev/uinput`, and any USB devices in use
+- check container logs for `[svc-esde] Starting udevd` to confirm udev started successfully
 
 ### AArch64 systems with GLES-only drivers
 
 - rebuild with `ESDE_GLES=on`
-- if running on Balena arm64 devices, make sure the Balena build sets `ESDE_GLES=on` or use the repository's `balena-compose.yml` default
+- if running on Balena arm64 devices, make sure the Balena build sets `ESDE_GLES=on` or use the repository's `docker-compose.yml` default
 - or try:
 
 ```bash

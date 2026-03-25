@@ -133,6 +133,8 @@ RUN echo "**** install runtime dependencies ****" && \
       libxkbcommon0 \
       libpoppler-cpp0v5 \
       libgles2-mesa \
+      udev \
+      dbus-x11 \
       pulseaudio \
       xinit \
       x11-xserver-utils \

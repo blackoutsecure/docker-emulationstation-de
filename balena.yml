@@ -14,20 +14,24 @@ post-provisioning: >-
       restart: unless-stopped
       environment:
         - TZ=Etc/UTC
-        - DISPLAY=:0
-        - ESDE_ARGS=
+        - DISPLAY_NUM=0
+        - XDG_RUNTIME_DIR=/run/esde
+        - ESDE_USE_INTERNAL_X=1
+        - UDEV=1
+        # - ESDE_ARGS=          # Optional: extra flags for es-de
         # - APP_USER=abc        # Optional: container user (default: abc)
         # - ESDE_HOME=/config   # Optional: ES-DE home directory
       volumes:
         - '/path/to/config:/config'
         - '/path/to/roms:/roms'
         - '/path/to/bios:/bios'
-        - '/tmp/.X11-unix:/tmp/.X11-unix:ro'
       devices:
         - '/dev/dri:/dev/dri'
         - '/dev/input:/dev/input'
         - '/dev/uinput:/dev/uinput'
         - '/dev/bus/usb:/dev/bus/usb'
+        - '/dev/snd:/dev/snd'
+      privileged: true
     ```
 
   Docker Hub image namespace: blackoutsecure

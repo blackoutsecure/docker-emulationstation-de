@@ -11,6 +11,7 @@ services:
       DISPLAY_NUM: '0'
       XDG_RUNTIME_DIR: /run/esde
       ESDE_USE_INTERNAL_X: '1'
+      UDEV: '1'
     volumes:
       - emulationstation-config:/config
       - emulationstation-roms:/roms
@@ -21,6 +22,10 @@ services:
       - /dev/uinput:/dev/uinput
       - /dev/bus/usb:/dev/bus/usb
       - /dev/snd:/dev/snd
+    labels:
+      io.balena.features.kernel-modules: '1'
+      io.balena.features.firmware: '1'
+      io.balena.features.dbus: '1'
     privileged: true
     tmpfs:
       - /var/tmp
@@ -31,8 +36,5 @@ services:
 
 volumes:
   emulationstation-config:
-    driver: local
   emulationstation-roms:
-    driver: local
   emulationstation-bios:
-    driver: local
