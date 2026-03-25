@@ -17,8 +17,8 @@ permissions:
 env:
   REGISTRY: docker.io
   BASE_IMAGE_REGISTRY: ghcr.io
-  DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME || 'blackoutsecure' }}
-  IMAGE_NAME: docker-emulationstation-de
+  DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
+  IMAGE_NAME: emulationstation-de
   REPO_URL: ${{ github.server_url }}/${{ github.repository }}
   UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
   UPSTREAM_RELEASE_API_URL: https://gitlab.com/api/v4/projects/es-de%2Femulationstation-de/releases/permalink/latest

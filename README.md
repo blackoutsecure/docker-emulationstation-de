@@ -5,7 +5,7 @@
 # docker-emulationstation-de
 
 [![GitHub Stars](https://img.shields.io/github/stars/blackoutsecure/docker-emulationstation-de?style=flat-square&color=E7931D&logo=github)](https://github.com/blackoutsecure/docker-emulationstation-de/stargazers)
-[![Docker Pulls](https://img.shields.io/docker/pulls/blackoutsecure/docker-emulationstation-de?style=flat-square&color=E7931D&logo=docker&logoColor=FFFFFF)](https://hub.docker.com/r/blackoutsecure/docker-emulationstation-de)
+[![Docker Pulls](https://img.shields.io/docker/pulls/blackoutsecure/emulationstation-de?style=flat-square&color=E7931D&logo=docker&logoColor=FFFFFF)](https://hub.docker.com/r/blackoutsecure/emulationstation-de)
 [![GitHub Release](https://img.shields.io/github/release/blackoutsecure/docker-emulationstation-de.svg?style=flat-square&color=E7931D&logo=github&logoColor=FFFFFF)](https://github.com/blackoutsecure/docker-emulationstation-de/releases)
 [![Release CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/release.yml?style=flat-square&label=release%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/release.yml)
 [![Docker CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/dockerhub-publish.yml?style=flat-square&label=docker%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/dockerhub-publish.yml)
@@ -25,7 +25,7 @@ This project packages upstream [ES-DE Frontend](https://gitlab.com/es-de/emulati
 
 Quick links:
 
-- Docker Hub listing: [blackoutsecure/docker-emulationstation-de](https://hub.docker.com/r/blackoutsecure/docker-emulationstation-de)
+- Docker Hub listing: [blackoutsecure/emulationstation-de](https://hub.docker.com/r/blackoutsecure/emulationstation-de)
 - GitHub repository: [blackoutsecure/docker-emulationstation-de](https://github.com/blackoutsecure/docker-emulationstation-de)
 - Upstream application: [es-de/emulationstation-de](https://gitlab.com/es-de/emulationstation-de)
 - Application Developer Site: [es-de.org](https://es-de.org/)
@@ -90,10 +90,10 @@ This image assumes:
 
 ```bash
 # Pull latest
-docker pull blackoutsecure/docker-emulationstation-de
+docker pull blackoutsecure/emulationstation-de
 
 # Pull specific version
-docker pull blackoutsecure/docker-emulationstation-de:latest-dev
+docker pull blackoutsecure/emulationstation-de:latest-dev
 ```
 
 For compose examples, device passthrough, Balena deployment, and local build options, see [Usage](#usage) below.
@@ -104,21 +104,21 @@ For compose examples, device passthrough, Balena deployment, and local build opt
 
 **Docker Hub (Recommended):**
 
-- All images are published to [Docker Hub](https://hub.docker.com/r/blackoutsecure/docker-emulationstation-de)
-- Simple pull command: `docker pull blackoutsecure/docker-emulationstation-de:latest`
+- All images are published to [Docker Hub](https://hub.docker.com/r/blackoutsecure/emulationstation-de)
+- Simple pull command: `docker pull blackoutsecure/emulationstation-de:latest`
 - Multi-arch support: amd64, arm64
 - No registry prefix needed when pulling from Docker Hub
 
 ```bash
 # Pull latest
-docker pull blackoutsecure/docker-emulationstation-de
+docker pull blackoutsecure/emulationstation-de
 
 # Pull specific version
-docker pull blackoutsecure/docker-emulationstation-de:latest-dev
+docker pull blackoutsecure/emulationstation-de:latest-dev
 
 # Pull architecture-specific tags
-docker pull blackoutsecure/docker-emulationstation-de:latest-amd64
-docker pull blackoutsecure/docker-emulationstation-de:latest-arm64
+docker pull blackoutsecure/emulationstation-de:latest-amd64
+docker pull blackoutsecure/emulationstation-de:latest-arm64
 ```
 
 ---
@@ -141,7 +141,7 @@ Upstream project details:
 
 ## Supported Architectures
 
-This image is published as a multi-arch manifest. Pulling `blackoutsecure/docker-emulationstation-de:latest` retrieves the correct image for your host architecture.
+This image is published as a multi-arch manifest. Pulling `blackoutsecure/emulationstation-de:latest` retrieves the correct image for your host architecture.
 
 The architectures supported by this image are:
 
@@ -160,7 +160,7 @@ The architectures supported by this image are:
 ---
 services:
   emulationstation:
-    image: blackoutsecure/docker-emulationstation-de:latest
+    image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     read_only: false
     environment:
@@ -192,7 +192,7 @@ services:
 ---
 services:
   emulationstation:
-    image: blackoutsecure/docker-emulationstation-de:latest
+    image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     read_only: false
     environment:
@@ -225,7 +225,7 @@ services:
 ---
 services:
   emulationstation:
-    image: blackoutsecure/docker-emulationstation-de:latest
+    image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     read_only: false
     environment:
@@ -260,7 +260,7 @@ services:
 ---
 services:
   emulationstation:
-    image: blackoutsecure/docker-emulationstation-de:latest
+    image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     read_only: false
     environment:
@@ -311,7 +311,7 @@ docker run -d \
   --tmpfs /var/tmp:nosuid,nodev,size=256m \
   --tmpfs /run:exec,nosuid,nodev,size=64m \
   --shm-size=1gb \
-  blackoutsecure/docker-emulationstation-de:latest
+  blackoutsecure/emulationstation-de:latest
 ```
 
 ### Balena Deployment
@@ -522,7 +522,7 @@ Stable builds follow upstream ES-DE release metadata. Dev builds follow the upst
 ## Support & Getting Help
 
 - GitHub repository: [blackoutsecure/docker-emulationstation-de](https://github.com/blackoutsecure/docker-emulationstation-de)
-- Docker Hub image: [blackoutsecure/docker-emulationstation-de](https://hub.docker.com/r/blackoutsecure/docker-emulationstation-de)
+- Docker Hub image: [blackoutsecure/emulationstation-de](https://hub.docker.com/r/blackoutsecure/emulationstation-de)
 - Upstream ES-DE project: [es-de/emulationstation-de](https://gitlab.com/es-de/emulationstation-de)
 
 ---
