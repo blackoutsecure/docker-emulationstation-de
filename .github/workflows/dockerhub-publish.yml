@@ -287,7 +287,7 @@ jobs:
     env:
       REGISTRY: docker.io
       DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
-      IMAGE_NAME: ${{ github.event.repository.name }}
+      IMAGE_NAME: emulationstation-de
       DISPATCH_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'all' }}
     steps:
       - name: Validate manifest prerequisites
