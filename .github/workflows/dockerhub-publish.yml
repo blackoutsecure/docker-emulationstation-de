@@ -92,33 +92,33 @@ jobs:
             base_name: linuxserver/baseimage-ubuntu
             base_variant: noble
             base_id: default
-          # Selkies base image (linuxserver/docker-baseimage-selkies:ubuntunoble)
+          # Selkies base image (linuxserver/baseimage-selkies:ubuntunoble)
           - channel: stable
             arch: amd64
             runner: ubuntu-latest
             platform: linux/amd64
-            base_name: linuxserver/docker-baseimage-selkies
+            base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
           - channel: stable
             arch: arm64
             runner: ubuntu-latest-arm64
             platform: linux/arm64
-            base_name: linuxserver/docker-baseimage-selkies
+            base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
           - channel: dev
             arch: amd64
             runner: ubuntu-latest
             platform: linux/amd64
-            base_name: linuxserver/docker-baseimage-selkies
+            base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
           - channel: dev
             arch: arm64
             runner: ubuntu-latest-arm64
             platform: linux/arm64
-            base_name: linuxserver/docker-baseimage-selkies
+            base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
     env:

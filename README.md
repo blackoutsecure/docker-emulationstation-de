@@ -12,7 +12,7 @@
 [![Balena CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/balenablock-publish.yml?style=flat-square&label=balena%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/balenablock-publish.yml)
 [![License](https://img.shields.io/github/license/blackoutsecure/docker-emulationstation-de?style=flat-square)](LICENSE)
 
-Unofficial community image for [ES-DE Frontend](https://gitlab.com/es-de/emulationstation-de), built with LinuxServer.io-style container patterns for Ubuntu, hardened runtime defaults, direct local-display operation, and optional Balena publishing.
+Unofficial community image for [ES-DE Frontend](https://gitlab.com/es-de/emulationstation-de), built with LinuxServer.io-style container patterns for Ubuntu, hardened runtime defaults, direct local-display operation, and optional Balena publishing. Available in two base image variants: standard (local X) and Selkies (browser-based streaming).
 
 Sponsored and maintained by [Blackout Secure](https://blackoutsecure.app).
 
@@ -111,17 +111,32 @@ For compose examples, device passthrough, Balena deployment, and local build opt
 - Simple pull command: `docker pull blackoutsecure/emulationstation-de:latest`
 - Multi-arch support: amd64, arm64
 - No registry prefix needed when pulling from Docker Hub
+- Two base image variants: **default** (local X) and **selkies** (browser-based streaming via [docker-baseimage-selkies](https://github.com/linuxserver/docker-baseimage-selkies))
+
+**Default variant** — based on `linuxserver/baseimage-ubuntu:noble`:
 
 ```bash
-# Pull latest
-docker pull blackoutsecure/emulationstation-de
+# Pull latest stable
+docker pull blackoutsecure/emulationstation-de:latest
 
-# Pull specific version
+# Pull specific upstream version
+docker pull blackoutsecure/emulationstation-de:<version>
+
+# Pull dev channel
 docker pull blackoutsecure/emulationstation-de:latest-dev
+```
 
-# Pull architecture-specific tags
-docker pull blackoutsecure/emulationstation-de:latest-amd64
-docker pull blackoutsecure/emulationstation-de:latest-arm64
+**Selkies variant** — based on `linuxserver/baseimage-selkies:ubuntunoble`:
+
+```bash
+# Pull latest stable selkies
+docker pull blackoutsecure/emulationstation-de:latest-selkies
+
+# Pull specific upstream version selkies
+docker pull blackoutsecure/emulationstation-de:<version>-selkies
+
+# Pull dev channel selkies
+docker pull blackoutsecure/emulationstation-de:latest-dev-selkies
 ```
 
 ---
@@ -148,10 +163,17 @@ This image is published as a multi-arch manifest. Pulling `blackoutsecure/emulat
 
 The architectures supported by this image are:
 
-| Architecture | Tag |
-| :----: | --- |
-| x86-64 | latest-amd64 |
-| arm64 | latest-arm64 |
+| Architecture | Default Tags | Selkies Tags |
+| :----: | --- | --- |
+| x86-64 | latest, latest-dev | latest-selkies, latest-dev-selkies |
+| arm64 | latest, latest-dev | latest-selkies, latest-dev-selkies |
+
+**Tag scheme:**
+
+| Variant | Stable | Dev | Pinned |
+| --- | --- | --- | --- |
+| Default | `latest`, `<version>` | `latest-dev` | `sha-<commit>-stable`, `sha-<commit>-dev` |
+| Selkies | `latest-selkies`, `<version>-selkies` | `latest-dev-selkies` | `sha-<commit>-stable-selkies`, `sha-<commit>-dev-selkies` |
 
 ---
 
@@ -491,9 +513,13 @@ Hardware passthrough guidance:
 
 ## Build Locally
 
+**Default base image (local X):**
+
 ```bash
 docker build \
   --build-arg BASE_IMAGE_REGISTRY=ghcr.io \
+  --build-arg BASE_IMAGE_NAME=linuxserver/baseimage-ubuntu \
+  --build-arg BASE_IMAGE_VARIANT=noble \
   --build-arg ESDE_VERSION=stable-3.4 \
   --build-arg ESDE_CMAKE_BUILD_TYPE=Release \
   --build-arg ESDE_GIT_DEPTH=1 \
@@ -506,6 +532,27 @@ docker build \
   --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
   --build-arg VERSION=local \
   -t docker-emulationstation-de:local .
+```
+
+**Selkies base image (browser-based streaming):**
+
+```bash
+docker build \
+  --build-arg BASE_IMAGE_REGISTRY=ghcr.io \
+  --build-arg BASE_IMAGE_NAME=linuxserver/baseimage-selkies \
+  --build-arg BASE_IMAGE_VARIANT=ubuntunoble \
+  --build-arg ESDE_VERSION=stable-3.4 \
+  --build-arg ESDE_CMAKE_BUILD_TYPE=Release \
+  --build-arg ESDE_GIT_DEPTH=1 \
+  --build-arg ESDE_STRIP_BINARIES=1 \
+  --build-arg ESDE_APPLICATION_UPDATER=off \
+  --build-arg ESDE_DEINIT_ON_LAUNCH=off \
+  --build-arg ESDE_GLES=off \
+  --build-arg ESDE_VIDEO_HW_DECODING=off \
+  --build-arg ESDE_EXTRA_CMAKE_ARGS="" \
+  --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+  --build-arg VERSION=local-selkies \
+  -t docker-emulationstation-de:local-selkies .
 ```
 
 Optional build toggles:
@@ -601,3 +648,4 @@ Stable builds follow upstream ES-DE release metadata. Dev builds follow the upst
 - Linux dev build docs: <https://gitlab.com/es-de/emulationstation-de/-/blob/master/INSTALL-DEV.md>
 - Linux AArch64 dev docs: <https://gitlab.com/es-de/emulationstation-de/-/blob/master/LINUX-AARCH64-DEV.md>
 - LSIO Ubuntu base image: <https://docs.linuxserver.io/images/docker-baseimage-ubuntu/>
+- LSIO Selkies base image: <https://github.com/linuxserver/docker-baseimage-selkies>
