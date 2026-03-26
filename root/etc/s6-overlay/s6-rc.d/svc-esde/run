@@ -13,6 +13,51 @@ mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
 chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${XDG_RUNTIME_DIR}"
 
+# --- Device group membership ---
+# The abc user needs supplementary groups for GPU, audio, and input access.
+# s6-setuidgid reads supplementary groups from /etc/group, so the user must
+# be a member before we drop privileges.
+app_user="${APP_USER:-abc}"
+for grp in video render audio input; do
+  if getent group "${grp}" >/dev/null 2>&1; then
+    if ! id -nG "${app_user}" 2>/dev/null | grep -qw "${grp}"; then
+      usermod -aG "${grp}" "${app_user}" 2>/dev/null || true
+    fi
+  fi
+done
+
+# Match host device GIDs for /dev/dri and /dev/snd if they differ from standard groups
+if [[ -e /dev/dri/card0 ]]; then
+  dri_gid="$(stat -c '%g' /dev/dri/card0 2>/dev/null)" || true
+  if [[ -n "${dri_gid}" && "${dri_gid}" != "0" ]]; then
+    if ! id -G "${app_user}" 2>/dev/null | grep -qw "${dri_gid}"; then
+      # Create/reuse a group matching the host GID and add the user
+      dri_grp="$(getent group "${dri_gid}" 2>/dev/null | cut -d: -f1)" || true
+      if [[ -z "${dri_grp}" ]]; then
+        groupadd -g "${dri_gid}" hostdri 2>/dev/null || true
+        dri_grp="hostdri"
+      fi
+      usermod -aG "${dri_grp}" "${app_user}" 2>/dev/null || true
+      echo "[svc-esde] Added ${app_user} to group ${dri_grp} (GID ${dri_gid}) for /dev/dri access."
+    fi
+  fi
+fi
+
+if [[ -e /dev/snd/controlC0 ]]; then
+  snd_gid="$(stat -c '%g' /dev/snd/controlC0 2>/dev/null)" || true
+  if [[ -n "${snd_gid}" && "${snd_gid}" != "0" ]]; then
+    if ! id -G "${app_user}" 2>/dev/null | grep -qw "${snd_gid}"; then
+      snd_grp="$(getent group "${snd_gid}" 2>/dev/null | cut -d: -f1)" || true
+      if [[ -z "${snd_grp}" ]]; then
+        groupadd -g "${snd_gid}" hostaudio 2>/dev/null || true
+        snd_grp="hostaudio"
+      fi
+      usermod -aG "${snd_grp}" "${app_user}" 2>/dev/null || true
+      echo "[svc-esde] Added ${app_user} to group ${snd_grp} (GID ${snd_gid}) for /dev/snd access."
+    fi
+  fi
+fi
+
 # --- Audio detection and setup ---
 # ES-DE requires PulseAudio or PipeWire; raw ALSA is not supported.
 
