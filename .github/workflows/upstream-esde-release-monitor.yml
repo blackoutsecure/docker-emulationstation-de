@@ -22,7 +22,7 @@ concurrency:
 env:
   UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
   TRACK_FILE: .github/upstream/latest_release.json
-  TARGET_WORKFLOW: dockerhub-publish.yml
+  TARGET_WORKFLOW: publish.yml
   GIT_CONFIG_USER_NAME: github-actions[bot]
   GIT_CONFIG_USER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
 

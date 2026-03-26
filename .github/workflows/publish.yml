@@ -1,4 +1,4 @@
-name: Docker Hub Build and Publish
+name: Docker Hub and Balena Publish Workflow
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'root/**'
-      - '.github/workflows/dockerhub-publish.yml'
+      - '.github/workflows/publish.yml'
   push:
     branches:
       - main
@@ -16,9 +16,10 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'docker-compose.yml'
+      - 'balena.yml'
       - 'root/**'
       - 'README.md'
-      - '.github/workflows/dockerhub-publish.yml'
+      - '.github/workflows/publish.yml'
   workflow_dispatch:
     inputs:
       publish:
@@ -53,10 +54,109 @@ env:
   UPSTREAM_RELEASE_JSON_URL: https://gitlab.com/es-de/emulationstation-de/-/raw/master/latest_release.json
   UPSTREAM_RELEASE_API_URL: https://gitlab.com/api/v4/projects/es-de%2Femulationstation-de/releases/permalink/latest
   UPSTREAM_GIT_URL: https://gitlab.com/es-de/emulationstation-de.git
+  BALENA_NAMESPACE: ${{ vars.BALENA_NAMESPACE || secrets.BALENA_USERNAME }}
+  BALENA_BLOCK_RELEASE: emulationstation-de
   NO_CACHE: 'true'
 
 jobs:
+  # ── Stage 1: Preflight ─────────────────────────────────────────────
+  # Lint, validate secrets, and resolve upstream version once for all jobs.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_publish: ${{ steps.context.outputs.should_publish }}
+      release_tag: ${{ steps.upstream.outputs.release_tag }}
+      stable_esde_version: ${{ steps.upstream.outputs.stable_esde_version }}
+      stable_version_label: ${{ steps.upstream.outputs.stable_version_label }}
+      dev_version_label: ${{ steps.upstream.outputs.dev_version_label }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine publish context
+        id: context
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && ( "${{ inputs.publish }}" == "true" ) ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate Dockerfile syntax
+        run: docker run --rm -i hadolint/hadolint:latest hadolint - < "${DOCKERFILE_PATH}" || true
+
+      - name: Validate required secrets and namespace
+        if: steps.context.outputs.should_publish == 'true'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ env.DOCKERHUB_NAMESPACE }}
+        run: |
+          set -euo pipefail
+
+          for var in DOCKERHUB_USERNAME DOCKERHUB_TOKEN DOCKERHUB_NAMESPACE; do
+            if [ -z "${!var}" ]; then
+              echo "${var} is not set"
+              exit 1
+            fi
+          done
+
+          if [[ "${DOCKERHUB_USERNAME}" =~ [[:space:]] ]]; then
+            echo "DOCKERHUB_USERNAME must not contain spaces"
+            exit 1
+          fi
+
+          if ! [[ "${DOCKERHUB_NAMESPACE}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+            echo "DOCKERHUB_NAMESPACE has invalid format. Use lowercase Docker Hub namespace slug only."
+            exit 1
+          fi
+
+          echo "✓ Docker Hub credentials validated"
+
+      - name: Resolve upstream ES-DE version
+        id: upstream
+        run: |
+          set -euo pipefail
+
+          RELEASE_META_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_JSON_URL}")"
+          RELEASE_TAG="$(echo "${RELEASE_META_JSON}" | jq -r '.stable.version // empty')"
+
+          if [ -z "${RELEASE_TAG}" ]; then
+            RELEASE_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_API_URL}")"
+            RELEASE_TAG="$(echo "${RELEASE_JSON}" | jq -r '.tag_name')"
+          fi
+
+          if [ -z "${RELEASE_TAG}" ] || [ "${RELEASE_TAG}" = "null" ]; then
+            echo "Failed to resolve latest ES-DE stable release tag"
+            exit 1
+          fi
+
+          # Resolve the exact git ref (with or without 'v' prefix)
+          if git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            ESDE_BUILD_REF="${RELEASE_TAG}"
+          elif git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/v${RELEASE_TAG}" >/dev/null 2>&1; then
+            ESDE_BUILD_REF="v${RELEASE_TAG}"
+          else
+            ESDE_BUILD_REF="${RELEASE_TAG}"
+          fi
+
+          {
+            echo "release_tag=${RELEASE_TAG}"
+            echo "stable_esde_version=${ESDE_BUILD_REF}"
+            echo "stable_version_label=stable-${RELEASE_TAG}"
+            echo "dev_version_label=dev-master-${GITHUB_SHA::12}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved ES-DE stable: ${RELEASE_TAG} (ref: ${ESDE_BUILD_REF})"
+
+  # ── Stage 2: Build ─────────────────────────────────────────────────
+  # Matrix build per channel × arch × base image. Publishes digests on main.
   docker:
+    needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -121,128 +221,55 @@ jobs:
             base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
-    env:
-      SHOULD_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (inputs.publish == true || inputs.publish == 'true')) }}
 
     steps:
+      - name: Skip if channel not selected
+        id: gate
+        run: |
+          DISPATCH_CHANNEL="${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'all' }}"
+          if [[ "${DISPATCH_CHANNEL}" != "all" && "${DISPATCH_CHANNEL}" != "${{ matrix.channel }}" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel }}
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/checkout@v4
 
-      - name: Validate Dockerfile syntax
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel }}
-        run: docker run --rm -i hadolint/hadolint:latest hadolint - < "${DOCKERFILE_PATH}" || true
-
       - name: Set up Docker Buildx
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel }}
+        if: steps.gate.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v4
 
-      - name: Validate required secrets and namespace
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_NAMESPACE: ${{ env.DOCKERHUB_NAMESPACE }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${DOCKERHUB_USERNAME}" ]; then
-            echo "DOCKERHUB_USERNAME secret is not set"
-            exit 1
-          fi
-
-          if [ -z "${DOCKERHUB_TOKEN}" ]; then
-            echo "DOCKERHUB_TOKEN secret is not set"
-            exit 1
-          fi
-
-          if [ -z "${DOCKERHUB_NAMESPACE}" ]; then
-            echo "DOCKERHUB_NAMESPACE repo variable is not set"
-            exit 1
-          fi
-
-          if [[ "${DOCKERHUB_USERNAME}" =~ [[:space:]] ]]; then
-            echo "DOCKERHUB_USERNAME must not contain spaces"
-            exit 1
-          fi
-
-          if [[ "${DOCKERHUB_NAMESPACE}" =~ [[:space:]] ]]; then
-            echo "DOCKERHUB_NAMESPACE must not contain spaces (use Docker Hub org/user slug)"
-            exit 1
-          fi
-
-          if ! [[ "${DOCKERHUB_NAMESPACE}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
-            echo "DOCKERHUB_NAMESPACE has invalid format. Use lowercase Docker Hub namespace slug only."
-            exit 1
-          fi
-
       - name: Docker Hub login
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
+        if: steps.gate.outputs.skip != 'true' && needs.preflight.outputs.should_publish == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Confirm Docker auth is active
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
-        run: docker info > /dev/null
-
-      - name: Resolve upstream ES-DE version
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel }}
-        id: upstream
+      - name: Resolve build parameters
+        if: steps.gate.outputs.skip != 'true'
+        id: params
         run: |
           set -euo pipefail
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
 
-          CHANNEL="${{ matrix.channel }}"
-
-          if [ "${CHANNEL}" = "stable" ]; then
-            RELEASE_META_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_JSON_URL}")"
-            RELEASE_TAG="$(echo "${RELEASE_META_JSON}" | jq -r '.stable.version // empty')"
-
-            if [ -z "${RELEASE_TAG}" ]; then
-              RELEASE_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_API_URL}")"
-              RELEASE_TAG="$(echo "${RELEASE_JSON}" | jq -r '.tag_name')"
-            fi
-
-            if [ -z "${RELEASE_TAG}" ] || [ "${RELEASE_TAG}" = "null" ]; then
-              echo "Failed to resolve latest ES-DE stable release tag from GitLab API"
-              exit 1
-            fi
-
-            # Upstream metadata uses plain semantic version (e.g. 3.4.0),
-            # while git refs may be tagged with or without a leading 'v'.
-            if git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-              ESDE_BUILD_REF="${RELEASE_TAG}"
-            elif git ls-remote --exit-code --tags "${UPSTREAM_GIT_URL}" "refs/tags/v${RELEASE_TAG}" >/dev/null 2>&1; then
-              ESDE_BUILD_REF="v${RELEASE_TAG}"
-            else
-              ESDE_BUILD_REF="${RELEASE_TAG}"
-            fi
-
-            ESDE_VERSION="${ESDE_BUILD_REF}"
-            VERSION_LABEL="stable-${RELEASE_TAG}"
-            ESDE_CMAKE_BUILD_TYPE="Release"
-            ESDE_STRIP_BINARIES="1"
+          if [ "${{ matrix.channel }}" = "stable" ]; then
+            echo "esde_version=${{ needs.preflight.outputs.stable_esde_version }}" >> "$GITHUB_OUTPUT"
+            echo "version_label=${{ needs.preflight.outputs.stable_version_label }}" >> "$GITHUB_OUTPUT"
+            echo "cmake_build_type=Release" >> "$GITHUB_OUTPUT"
+            echo "strip_binaries=1" >> "$GITHUB_OUTPUT"
           else
-            ESDE_VERSION="master"
-            VERSION_LABEL="dev-master-${GITHUB_SHA::12}"
-            ESDE_CMAKE_BUILD_TYPE="RelWithDebInfo"
-            ESDE_STRIP_BINARIES="0"
+            echo "esde_version=master" >> "$GITHUB_OUTPUT"
+            echo "version_label=${{ needs.preflight.outputs.dev_version_label }}" >> "$GITHUB_OUTPUT"
+            echo "cmake_build_type=RelWithDebInfo" >> "$GITHUB_OUTPUT"
+            echo "strip_binaries=0" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
-          echo "esde_version=${ESDE_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "esde_cmake_build_type=${ESDE_CMAKE_BUILD_TYPE}" >> "$GITHUB_OUTPUT"
-          echo "esde_strip_binaries=${ESDE_STRIP_BINARIES}" >> "$GITHUB_OUTPUT"
-          echo "version_label=${VERSION_LABEL}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare build args
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel }}
-        id: buildargs
-        run: echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
-
       - name: Build only (PR/check mode)
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH != 'true' }}
+        if: steps.gate.outputs.skip != 'true' && needs.preflight.outputs.should_publish != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -256,26 +283,26 @@ jobs:
             BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
             BASE_IMAGE_NAME=${{ matrix.base_name }}
             BASE_IMAGE_VARIANT=${{ matrix.base_variant }}
-            BUILD_DATE=${{ steps.buildargs.outputs.build_date }}
-            VERSION=check-${{ github.sha }}-${{ steps.upstream.outputs.channel }}
-            ESDE_VERSION=${{ steps.upstream.outputs.esde_version }}
-            ESDE_CMAKE_BUILD_TYPE=${{ steps.upstream.outputs.esde_cmake_build_type }}
-            ESDE_STRIP_BINARIES=${{ steps.upstream.outputs.esde_strip_binaries }}
+            BUILD_DATE=${{ steps.params.outputs.build_date }}
+            VERSION=check-${{ github.sha }}-${{ matrix.channel }}
+            ESDE_VERSION=${{ steps.params.outputs.esde_version }}
+            ESDE_CMAKE_BUILD_TYPE=${{ steps.params.outputs.cmake_build_type }}
+            ESDE_STRIP_BINARIES=${{ steps.params.outputs.strip_binaries }}
             ESDE_APPLICATION_UPDATER=off
             ESDE_DEINIT_ON_LAUNCH=off
             ESDE_GLES=off
             ESDE_VIDEO_HW_DECODING=off
             VCS_URL=${{ env.REPO_URL }}
           labels: |
-            org.opencontainers.image.created=${{ steps.buildargs.outputs.build_date }}
-            org.opencontainers.image.version=check-${{ github.sha }}-${{ steps.upstream.outputs.channel }}
+            org.opencontainers.image.created=${{ steps.params.outputs.build_date }}
+            org.opencontainers.image.version=check-${{ github.sha }}-${{ matrix.channel }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ env.REPO_URL }}
             org.opencontainers.image.url=${{ env.REPO_URL }}
-            build_version=Linuxserver.io version:- check-${{ github.sha }}-${{ steps.upstream.outputs.channel }} Build-date:- ${{ steps.buildargs.outputs.build_date }}
+            build_version=Linuxserver.io version:- check-${{ github.sha }}-${{ matrix.channel }} Build-date:- ${{ steps.params.outputs.build_date }}
 
-      - name: Build and publish by digest (main/manual publish mode)
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
+      - name: Build and publish by digest
+        if: steps.gate.outputs.skip != 'true' && needs.preflight.outputs.should_publish == 'true'
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -290,26 +317,26 @@ jobs:
             BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
             BASE_IMAGE_NAME=${{ matrix.base_name }}
             BASE_IMAGE_VARIANT=${{ matrix.base_variant }}
-            BUILD_DATE=${{ steps.buildargs.outputs.build_date }}
-            VERSION=${{ steps.upstream.outputs.version_label }}
-            ESDE_VERSION=${{ steps.upstream.outputs.esde_version }}
-            ESDE_CMAKE_BUILD_TYPE=${{ steps.upstream.outputs.esde_cmake_build_type }}
-            ESDE_STRIP_BINARIES=${{ steps.upstream.outputs.esde_strip_binaries }}
+            BUILD_DATE=${{ steps.params.outputs.build_date }}
+            VERSION=${{ steps.params.outputs.version_label }}
+            ESDE_VERSION=${{ steps.params.outputs.esde_version }}
+            ESDE_CMAKE_BUILD_TYPE=${{ steps.params.outputs.cmake_build_type }}
+            ESDE_STRIP_BINARIES=${{ steps.params.outputs.strip_binaries }}
             ESDE_APPLICATION_UPDATER=off
             ESDE_DEINIT_ON_LAUNCH=off
             ESDE_GLES=off
             ESDE_VIDEO_HW_DECODING=off
             VCS_URL=${{ env.REPO_URL }}
           labels: |
-            org.opencontainers.image.created=${{ steps.buildargs.outputs.build_date }}
-            org.opencontainers.image.version=${{ steps.upstream.outputs.version_label }}
+            org.opencontainers.image.created=${{ steps.params.outputs.build_date }}
+            org.opencontainers.image.version=${{ steps.params.outputs.version_label }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ env.REPO_URL }}
             org.opencontainers.image.url=${{ env.REPO_URL }}
-            build_version=Linuxserver.io version:- ${{ steps.upstream.outputs.version_label }} Build-date:- ${{ steps.buildargs.outputs.build_date }}
+            build_version=Linuxserver.io version:- ${{ steps.params.outputs.version_label }} Build-date:- ${{ steps.params.outputs.build_date }}
 
-      - name: Export digest
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
+      - name: Export and upload digest
+        if: steps.gate.outputs.skip != 'true' && needs.preflight.outputs.should_publish == 'true'
         run: |
           set -euo pipefail
           mkdir -p /tmp/digests
@@ -317,7 +344,7 @@ jobs:
           touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload digest artifact
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
+        if: steps.gate.outputs.skip != 'true' && needs.preflight.outputs.should_publish == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.channel }}-${{ matrix.base_id }}-${{ matrix.arch }}
@@ -325,63 +352,27 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # ── Stage 3: Manifest ──────────────────────────────────────────────
+  # Assemble multi-arch manifests and tag on Docker Hub.
   manifest:
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (inputs.publish == true || inputs.publish == 'true')) }}
-    needs: docker
+    needs: [preflight, docker]
+    if: needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      release_tag: ${{ needs.preflight.outputs.release_tag }}
     env:
-      REGISTRY: docker.io
-      DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
-      IMAGE_NAME: emulationstation-de
       DISPATCH_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'all' }}
     steps:
-      - name: Validate manifest prerequisites
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
-            echo "ERROR: Docker Hub credentials not configured"
-            exit 1
-          fi
-
-          echo "✓ Docker Hub credentials validated"
-
       - name: Docker Hub login
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Confirm Docker auth is active
-        run: docker info > /dev/null && echo "✓ Docker authentication confirmed"
-
-      - name: Resolve stable release tag
-        id: stable
-        run: |
-          set -euo pipefail
-
-          RELEASE_META_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_JSON_URL}")"
-          RELEASE_TAG="$(echo "${RELEASE_META_JSON}" | jq -r '.stable.version // empty')"
-
-          if [ -z "${RELEASE_TAG}" ]; then
-            RELEASE_JSON="$(curl -fsSL "${UPSTREAM_RELEASE_API_URL}")"
-            RELEASE_TAG="$(echo "${RELEASE_JSON}" | jq -r '.tag_name')"
-          fi
-
-          if [ -z "${RELEASE_TAG}" ] || [ "${RELEASE_TAG}" = "null" ]; then
-            echo "Failed to resolve latest ES-DE stable release tag"
-            exit 1
-          fi
-
-          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-
       # Default base image digests
       - name: Download stable default digest artifacts
-        if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'stable' }}
+        if: env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'stable'
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests-stable-default
@@ -389,7 +380,7 @@ jobs:
           merge-multiple: true
 
       - name: Download dev default digest artifacts
-        if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'dev' }}
+        if: env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'dev'
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests-dev-default
@@ -398,7 +389,7 @@ jobs:
 
       # Selkies base image digests
       - name: Download stable selkies digest artifacts
-        if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'stable' }}
+        if: env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'stable'
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests-stable-selkies
@@ -406,7 +397,7 @@ jobs:
           merge-multiple: true
 
       - name: Download dev selkies digest artifacts
-        if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'dev' }}
+        if: env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'dev'
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests-dev-selkies
@@ -416,7 +407,7 @@ jobs:
       - name: Create and push multi-arch manifests
         env:
           IMAGE_REF: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}
-          RELEASE_TAG: ${{ steps.stable.outputs.release_tag }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
           SHORT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -519,9 +510,9 @@ jobs:
             docker buildx imagetools inspect "${IMAGE_REF}:sha-${SHORT_SHA}-dev-selkies"
           fi
 
+  # ── Stage 4a: Update Docker Hub description ────────────────────────
   update-description:
     needs: manifest
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (inputs.publish == true || inputs.publish == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -536,3 +527,60 @@ jobs:
           repository: ${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}
           short-description: ${{ github.event.repository.description }}
           enable-url-completion: true
+
+  # ── Stage 4b: Publish Balena block (parallel with 4a) ──────────────
+  balena-block-publish:
+    needs: [preflight, manifest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update balena.yml with resolved version
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.preflight.outputs.release_tag }}"
+          echo "Updating balena.yml version to: ${VERSION}"
+          sed -i -E "s/^version: .*/version: ${VERSION}/" balena.yml
+          grep "^version:" balena.yml
+
+      - name: Persist balena.yml version
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.preflight.outputs.release_tag }}"
+
+          if git diff --quiet -- balena.yml; then
+            echo "balena.yml already matches ${VERSION}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add balena.yml
+          git commit -m "chore: sync balena block version to ${VERSION}"
+          git push
+
+      - name: Resolve Balena publish target
+        id: targets
+        run: |
+          set -euo pipefail
+          BLOCK_FLEET="${BALENA_NAMESPACE}/${BALENA_BLOCK_RELEASE}"
+          echo "block_fleet=${BLOCK_FLEET}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Balena block release
+        uses: balena-io/deploy-to-balena-action@master
+        with:
+          balena_token: ${{ secrets.BALENA_API_TOKEN }}
+          fleet: ${{ steps.targets.outputs.block_fleet }}
+          cache: false
+          layer_cache: false
+          debug: false
+          source: .
+
+      - name: Log deployment info
+        run: |
+          echo "Published block release slug: ${{ steps.targets.outputs.block_fleet }}"
+          echo "Balena version: ${{ needs.preflight.outputs.release_tag }}"

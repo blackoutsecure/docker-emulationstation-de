@@ -8,8 +8,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/blackoutsecure/emulationstation-de?style=flat-square&color=E7931D&logo=docker&logoColor=FFFFFF)](https://hub.docker.com/r/blackoutsecure/emulationstation-de)
 [![GitHub Release](https://img.shields.io/github/release/blackoutsecure/docker-emulationstation-de.svg?style=flat-square&color=E7931D&logo=github&logoColor=FFFFFF)](https://github.com/blackoutsecure/docker-emulationstation-de/releases)
 [![Release CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/release.yml?style=flat-square&label=release%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/release.yml)
-[![Docker CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/dockerhub-publish.yml?style=flat-square&label=docker%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/dockerhub-publish.yml)
-[![Balena CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/balenablock-publish.yml?style=flat-square&label=balena%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/balenablock-publish.yml)
+[![Docker CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/publish.yml?style=flat-square&label=docker%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/publish.yml)
 [![License](https://img.shields.io/github/license/blackoutsecure/docker-emulationstation-de?style=flat-square)](LICENSE)
 
 Unofficial community image for [ES-DE Frontend](https://gitlab.com/es-de/emulationstation-de), built with LinuxServer.io-style container patterns for Ubuntu, hardened runtime defaults, direct local-display operation, and optional Balena publishing. Available in two base image variants: standard (local X) and Selkies (browser-based streaming).
@@ -393,7 +392,7 @@ This image can also be deployed to Balena-powered devices using the included [do
 
 - Block metadata: [balena.yml](balena.yml)
 - Compose file: [docker-compose.yml](docker-compose.yml)
-- Publish workflow: [.github/workflows/balenablock-publish.yml](.github/workflows/balenablock-publish.yml)
+- Publish workflow: [.github/workflows/publish.yml](.github/workflows/publish.yml) (balena-block-publish job)
 
 ```bash
 balena push <your-app-slug>
@@ -621,10 +620,9 @@ MESA_GL_VERSION_OVERRIDE=3.3 MESA_LOADER_DRIVER_OVERRIDE=zink ./es-de
 
 ## Release & Versioning
 
-- Stable Docker publishing is handled by [.github/workflows/dockerhub-publish.yml](.github/workflows/dockerhub-publish.yml)
+- Stable Docker and Balena block publishing is handled by [.github/workflows/publish.yml](.github/workflows/publish.yml)
 - GitHub release publishing is handled by [.github/workflows/release.yml](.github/workflows/release.yml)
 - Upstream ES-DE stable release monitoring is handled by [.github/workflows/upstream-esde-release-monitor.yml](.github/workflows/upstream-esde-release-monitor.yml)
-- Balena block publishing is handled by [.github/workflows/balenablock-publish.yml](.github/workflows/balenablock-publish.yml)
 
 Stable builds follow upstream ES-DE release metadata. Dev builds follow the upstream `master` branch.
 
