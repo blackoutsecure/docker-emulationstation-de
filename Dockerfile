@@ -134,6 +134,9 @@ RUN echo "**** install runtime dependencies ****" && \
       libpoppler-cpp0v5 \
       libgles2-mesa \
       udev \
+      dbus \
+      dbus-daemon \
+      dbus-system-bus-common \
       dbus-x11 \
       pulseaudio \
       xinit \
@@ -143,10 +146,11 @@ RUN echo "**** install runtime dependencies ****" && \
       xserver-xorg-input-libinput \
       xserver-xorg-legacy \
       xserver-xorg-video-fbdev \
-      xinput && \
-  echo "**** record build version ****" && \
-    if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi && \
-    echo "Linuxserver.io version:- ${VERSION:-unknown} Build-date:- ${BUILD_DATE:-unknown} Revision:- ${VCS_REF:-unknown} ES-DE:- ${ESDE_VERSION:-unknown}" > /build_version && \
+      xinput \
+      xfonts-base \
+      xfonts-100dpi \
+      xfonts-75dpi \
+      xfonts-cyrillic && \
   echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \
@@ -160,6 +164,10 @@ COPY /root/usr/local/bin/esde-startx-session /usr/local/bin/esde-startx-session
 COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
 
 RUN set -eux; \
+  echo "**** record build version ****"; \
+  if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi; \
+  echo "Linuxserver.io version:- ${VERSION:-unknown} Build-date:- ${BUILD_DATE:-unknown} Revision:- ${VCS_REF:-unknown} ES-DE:- ${ESDE_VERSION:-unknown}" > /build_version; \
+  echo "**** set permissions ****"; \
   chown -R root:root /etc/s6-overlay/s6-rc.d; \
   chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d; \
   chmod 755 /etc/s6-overlay/s6-rc.d/user/contents.d; \

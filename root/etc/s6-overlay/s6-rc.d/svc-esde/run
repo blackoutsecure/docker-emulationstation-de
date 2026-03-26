@@ -189,18 +189,27 @@ if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
   if [[ -S /run/dbus/system_bus_socket ]]; then
     export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
   elif command -v dbus-daemon >/dev/null 2>&1; then
-    mkdir -p /run/dbus
-    dbus-daemon --system --nofork --nopidfile 2>&1 | sed --unbuffered 's/^/[dbus] /' &
-    # Wait briefly for the socket to appear
-    for _i in $(seq 1 20); do
-      [[ -S /run/dbus/system_bus_socket ]] && break
-      sleep 0.1
-    done
-    if [[ -S /run/dbus/system_bus_socket ]]; then
-      export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
-      echo "[svc-esde] Started dbus-daemon; system bus available."
+    # Ensure dbus system config and machine-id exist
+    if [[ ! -f /usr/share/dbus-1/system.conf ]]; then
+      echo "[svc-esde] Warning: /usr/share/dbus-1/system.conf not found. Install 'dbus' package." >&2
+      echo "[svc-esde]   Skipping dbus-daemon start; Xorg will log dbus-core errors (harmless but noisy)." >&2
     else
-      echo "[svc-esde] Warning: dbus-daemon started but socket not found." >&2
+      if command -v dbus-uuidgen >/dev/null 2>&1; then
+        dbus-uuidgen --ensure 2>/dev/null || true
+      fi
+      mkdir -p /run/dbus
+      dbus-daemon --system --nofork --nopidfile 2>&1 | sed --unbuffered 's/^/[dbus] /' &
+      # Wait briefly for the socket to appear
+      for _i in $(seq 1 20); do
+        [[ -S /run/dbus/system_bus_socket ]] && break
+        sleep 0.1
+      done
+      if [[ -S /run/dbus/system_bus_socket ]]; then
+        export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+        echo "[svc-esde] Started dbus-daemon; system bus available."
+      else
+        echo "[svc-esde] Warning: dbus-daemon started but socket not found." >&2
+      fi
     fi
   fi
 fi
