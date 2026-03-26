@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 ARG BASE_IMAGE_REGISTRY=ghcr.io
-ARG BASE_IMAGE_NAME=linuxserver/baseimage-debian
-ARG BASE_IMAGE_VARIANT=bookworm
+ARG BASE_IMAGE_NAME=linuxserver/baseimage-ubuntu
+ARG BASE_IMAGE_VARIANT=noble
 ARG BASE_IMAGE=${BASE_IMAGE_REGISTRY}/${BASE_IMAGE_NAME}:${BASE_IMAGE_VARIANT}
 ARG BUILD_OUTPUT_DIR=/out
 ARG ESDE_REPO=https://gitlab.com/es-de/emulationstation-de.git
@@ -100,7 +100,7 @@ ARG VCS_URL
 LABEL build_version="Linuxserver.io version:- ${VERSION} Build-date:- ${BUILD_DATE}"
 LABEL maintainer="Blackout Secure - https://blackoutsecure.app/"
 LABEL org.opencontainers.image.title="docker-emulationstation-de" \
-  org.opencontainers.image.description="LinuxServer.io style Debian containerized build of EmulationStation-DE for local display and arcade-oriented hardware passthrough." \
+  org.opencontainers.image.description="LinuxServer.io style Ubuntu containerized build of EmulationStation-DE for local display and arcade-oriented hardware passthrough." \
     org.opencontainers.image.url="${VCS_URL}" \
     org.opencontainers.image.source="${VCS_URL}" \
     org.opencontainers.image.revision="unknown" \
@@ -119,27 +119,27 @@ RUN echo "**** install runtime dependencies ****" && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       libsdl2-2.0-0 \
-      libavcodec59 \
-      libavfilter8 \
-      libavformat59 \
-      libavutil57 \
+      libavcodec60 \
+      libavfilter9 \
+      libavformat60 \
+      libavutil58 \
       libfreeimage3 \
       libfreetype6 \
-      libgit2-1.5 \
-      libcurl4 \
+      libgit2-1.7 \
+      libcurl4t64 \
       libpugixml1v5 \
-      libasound2 \
+      libasound2t64 \
       libbluetooth3 \
       libharfbuzz0b \
-      libicu72 \
+      libicu74 \
       libgl1 \
       libopengl0 \
       libegl1 \
       libgbm1 \
       libdrm2 \
       libxkbcommon0 \
-      libpoppler-cpp0v5 \
-      libgles2-mesa \
+      libpoppler-cpp0t64 \
+      libgles2 \
       udev \
       dbus \
       dbus-daemon \
@@ -157,6 +157,7 @@ RUN echo "**** install runtime dependencies ****" && \
       xfonts-base \
       xfonts-100dpi \
       xfonts-75dpi \
+      xfonts-cyrillic \
       xfonts-scalable && \
   echo "**** cleanup ****" && \
     apt-get clean && \
@@ -173,8 +174,6 @@ COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
 COPY /root/defaults/roms/LICENSE-bundled-roms.txt /defaults/roms/LICENSE-bundled-roms.txt
 
 RUN set -eux; \
-  echo "**** suppress Xorg font path warnings ****"; \
-  mkdir -p /usr/share/fonts/X11/cyrillic; \
   echo "**** record build version ****"; \
   if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi; \
   echo "Linuxserver.io version:- ${VERSION:-unknown} Build-date:- ${BUILD_DATE:-unknown} Revision:- ${VCS_REF:-unknown} ES-DE:- ${ESDE_VERSION:-unknown}" > /build_version; \

@@ -12,7 +12,7 @@
 [![Balena CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/docker-emulationstation-de/balenablock-publish.yml?style=flat-square&label=balena%20ci&color=E7931D)](https://github.com/blackoutsecure/docker-emulationstation-de/actions/workflows/balenablock-publish.yml)
 [![License](https://img.shields.io/github/license/blackoutsecure/docker-emulationstation-de?style=flat-square)](LICENSE)
 
-Unofficial community image for [ES-DE Frontend](https://gitlab.com/es-de/emulationstation-de), built with LinuxServer.io-style container patterns for Debian, hardened runtime defaults, direct local-display operation, and optional Balena publishing.
+Unofficial community image for [ES-DE Frontend](https://gitlab.com/es-de/emulationstation-de), built with LinuxServer.io-style container patterns for Ubuntu, hardened runtime defaults, direct local-display operation, and optional Balena publishing.
 
 Sponsored and maintained by [Blackout Secure](https://blackoutsecure.app).
 
@@ -600,4 +600,4 @@ Stable builds follow upstream ES-DE release metadata. Dev builds follow the upst
 - Linux build/install docs: <https://gitlab.com/es-de/emulationstation-de/-/blob/master/INSTALL.md#building-on-linux-and-unix>
 - Linux dev build docs: <https://gitlab.com/es-de/emulationstation-de/-/blob/master/INSTALL-DEV.md>
 - Linux AArch64 dev docs: <https://gitlab.com/es-de/emulationstation-de/-/blob/master/LINUX-AARCH64-DEV.md>
-- LSIO Debian base image: <https://docs.linuxserver.io/images/docker-baseimage-debian/>
+- LSIO Ubuntu base image: <https://docs.linuxserver.io/images/docker-baseimage-ubuntu/>

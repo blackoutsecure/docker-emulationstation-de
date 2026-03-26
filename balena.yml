@@ -1,6 +1,6 @@
 name: docker-emulationstation-de
 description: >-
-  LinuxServer.io style Debian containerized build of EmulationStation-DE (ES-DE)
+  LinuxServer.io style Ubuntu containerized build of EmulationStation-DE (ES-DE)
   for local display and arcade-oriented hardware passthrough.
 
 post-provisioning: >-

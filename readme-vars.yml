@@ -3,7 +3,7 @@
 project_name: emulationstation-de
 project_url: "https://gitlab.com/es-de/emulationstation-de"
 project_logo: "https://raw.githubusercontent.com/blackoutsecure/docker-emulationstation-de/main/logo.png"
-project_blurb: "[ES-DE Frontend]({{ project_url }}) is an EmulationStation-derived frontend for browsing ROM libraries and launching emulators. This image is an unofficial community container built in a LinuxServer.io-style pattern, with Debian, hardened runtime defaults, local-display support, and optional Balena publishing. Sponsored and maintained by Blackout Secure (https://blackoutsecure.app)."
+project_blurb: "[ES-DE Frontend]({{ project_url }}) is an EmulationStation-derived frontend for browsing ROM libraries and launching emulators. This image is an unofficial community container built in a LinuxServer.io-style pattern, with Ubuntu, hardened runtime defaults, local-display support, and optional Balena publishing. Sponsored and maintained by Blackout Secure (https://blackoutsecure.app)."
 project_lsio_github_repo_url: "https://github.com/blackoutsecure/docker-emulationstation-de"
 project_categories: "Emulation,Games,Desktop,Media"
 
