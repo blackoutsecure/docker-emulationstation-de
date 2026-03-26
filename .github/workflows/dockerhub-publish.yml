@@ -63,22 +63,64 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Default base image (linuxserver/baseimage-ubuntu:noble)
           - channel: stable
             arch: amd64
             runner: ubuntu-latest
             platform: linux/amd64
+            base_name: linuxserver/baseimage-ubuntu
+            base_variant: noble
+            base_id: default
           - channel: stable
             arch: arm64
             runner: ubuntu-latest-arm64
             platform: linux/arm64
+            base_name: linuxserver/baseimage-ubuntu
+            base_variant: noble
+            base_id: default
           - channel: dev
             arch: amd64
             runner: ubuntu-latest
             platform: linux/amd64
+            base_name: linuxserver/baseimage-ubuntu
+            base_variant: noble
+            base_id: default
           - channel: dev
             arch: arm64
             runner: ubuntu-latest-arm64
             platform: linux/arm64
+            base_name: linuxserver/baseimage-ubuntu
+            base_variant: noble
+            base_id: default
+          # Selkies base image (linuxserver/docker-baseimage-selkies:ubuntunoble)
+          - channel: stable
+            arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_name: linuxserver/docker-baseimage-selkies
+            base_variant: ubuntunoble
+            base_id: selkies
+          - channel: stable
+            arch: arm64
+            runner: ubuntu-latest-arm64
+            platform: linux/arm64
+            base_name: linuxserver/docker-baseimage-selkies
+            base_variant: ubuntunoble
+            base_id: selkies
+          - channel: dev
+            arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+            base_name: linuxserver/docker-baseimage-selkies
+            base_variant: ubuntunoble
+            base_id: selkies
+          - channel: dev
+            arch: arm64
+            runner: ubuntu-latest-arm64
+            platform: linux/arm64
+            base_name: linuxserver/docker-baseimage-selkies
+            base_variant: ubuntunoble
+            base_id: selkies
     env:
       SHOULD_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (inputs.publish == true || inputs.publish == 'true')) }}
 
@@ -212,6 +254,8 @@ jobs:
           provenance: false
           build-args: |
             BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
+            BASE_IMAGE_NAME=${{ matrix.base_name }}
+            BASE_IMAGE_VARIANT=${{ matrix.base_variant }}
             BUILD_DATE=${{ steps.buildargs.outputs.build_date }}
             VERSION=check-${{ github.sha }}-${{ steps.upstream.outputs.channel }}
             ESDE_VERSION=${{ steps.upstream.outputs.esde_version }}
@@ -244,6 +288,8 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
+            BASE_IMAGE_NAME=${{ matrix.base_name }}
+            BASE_IMAGE_VARIANT=${{ matrix.base_variant }}
             BUILD_DATE=${{ steps.buildargs.outputs.build_date }}
             VERSION=${{ steps.upstream.outputs.version_label }}
             ESDE_VERSION=${{ steps.upstream.outputs.esde_version }}
@@ -274,7 +320,7 @@ jobs:
         if: ${{ (github.event_name != 'workflow_dispatch' || inputs.channel == 'all' || inputs.channel == matrix.channel) && env.SHOULD_PUBLISH == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.channel }}-${{ matrix.arch }}
+          name: digests-${{ matrix.channel }}-${{ matrix.base_id }}-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -333,20 +379,38 @@ jobs:
 
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Download stable digest artifacts
+      # Default base image digests
+      - name: Download stable default digest artifacts
         if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'stable' }}
         uses: actions/download-artifact@v4
         with:
-          path: /tmp/digests-stable
-          pattern: digests-stable-*
+          path: /tmp/digests-stable-default
+          pattern: digests-stable-default-*
           merge-multiple: true
 
-      - name: Download dev digest artifacts
+      - name: Download dev default digest artifacts
         if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'dev' }}
         uses: actions/download-artifact@v4
         with:
-          path: /tmp/digests-dev
-          pattern: digests-dev-*
+          path: /tmp/digests-dev-default
+          pattern: digests-dev-default-*
+          merge-multiple: true
+
+      # Selkies base image digests
+      - name: Download stable selkies digest artifacts
+        if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'stable' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests-stable-selkies
+          pattern: digests-stable-selkies-*
+          merge-multiple: true
+
+      - name: Download dev selkies digest artifacts
+        if: ${{ env.DISPATCH_CHANNEL == 'all' || env.DISPATCH_CHANNEL == 'dev' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests-dev-selkies
+          pattern: digests-dev-selkies-*
           merge-multiple: true
 
       - name: Create and push multi-arch manifests
@@ -359,11 +423,13 @@ jobs:
 
           SHORT_SHA="${SHORT_SHA::12}"
 
+          # --- Default base image manifests ---
+
           if [ "${DISPATCH_CHANNEL}" = "all" ] || [ "${DISPATCH_CHANNEL}" = "stable" ]; then
-            mapfile -t STABLE_DIGESTS < <(find /tmp/digests-stable -type f -printf '%f\n' | sort)
+            mapfile -t STABLE_DIGESTS < <(find /tmp/digests-stable-default -type f -printf '%f\n' | sort)
 
             if [ "${#STABLE_DIGESTS[@]}" -eq 0 ]; then
-              echo "No stable digests found to assemble multi-arch manifest"
+              echo "No stable default digests found to assemble multi-arch manifest"
               exit 1
             fi
 
@@ -384,10 +450,10 @@ jobs:
           fi
 
           if [ "${DISPATCH_CHANNEL}" = "all" ] || [ "${DISPATCH_CHANNEL}" = "dev" ]; then
-            mapfile -t DEV_DIGESTS < <(find /tmp/digests-dev -type f -printf '%f\n' | sort)
+            mapfile -t DEV_DIGESTS < <(find /tmp/digests-dev-default -type f -printf '%f\n' | sort)
 
             if [ "${#DEV_DIGESTS[@]}" -eq 0 ]; then
-              echo "No dev digests found to assemble multi-arch manifest"
+              echo "No dev default digests found to assemble multi-arch manifest"
               exit 1
             fi
 
@@ -403,6 +469,54 @@ jobs:
 
             docker buildx imagetools inspect "${IMAGE_REF}:latest-dev"
             docker buildx imagetools inspect "${IMAGE_REF}:sha-${SHORT_SHA}-dev"
+          fi
+
+          # --- Selkies base image manifests ---
+
+          if [ "${DISPATCH_CHANNEL}" = "all" ] || [ "${DISPATCH_CHANNEL}" = "stable" ]; then
+            mapfile -t STABLE_SELKIES_DIGESTS < <(find /tmp/digests-stable-selkies -type f -printf '%f\n' | sort)
+
+            if [ "${#STABLE_SELKIES_DIGESTS[@]}" -eq 0 ]; then
+              echo "No stable selkies digests found to assemble multi-arch manifest"
+              exit 1
+            fi
+
+            STABLE_SELKIES_SOURCES=()
+            for digest in "${STABLE_SELKIES_DIGESTS[@]}"; do
+              STABLE_SELKIES_SOURCES+=("${IMAGE_REF}@sha256:${digest}")
+            done
+
+            docker buildx imagetools create \
+              --tag "${IMAGE_REF}:latest-selkies" \
+              --tag "${IMAGE_REF}:${RELEASE_TAG}-selkies" \
+              --tag "${IMAGE_REF}:sha-${SHORT_SHA}-stable-selkies" \
+              "${STABLE_SELKIES_SOURCES[@]}"
+
+            docker buildx imagetools inspect "${IMAGE_REF}:latest-selkies"
+            docker buildx imagetools inspect "${IMAGE_REF}:${RELEASE_TAG}-selkies"
+            docker buildx imagetools inspect "${IMAGE_REF}:sha-${SHORT_SHA}-stable-selkies"
+          fi
+
+          if [ "${DISPATCH_CHANNEL}" = "all" ] || [ "${DISPATCH_CHANNEL}" = "dev" ]; then
+            mapfile -t DEV_SELKIES_DIGESTS < <(find /tmp/digests-dev-selkies -type f -printf '%f\n' | sort)
+
+            if [ "${#DEV_SELKIES_DIGESTS[@]}" -eq 0 ]; then
+              echo "No dev selkies digests found to assemble multi-arch manifest"
+              exit 1
+            fi
+
+            DEV_SELKIES_SOURCES=()
+            for digest in "${DEV_SELKIES_DIGESTS[@]}"; do
+              DEV_SELKIES_SOURCES+=("${IMAGE_REF}@sha256:${digest}")
+            done
+
+            docker buildx imagetools create \
+              --tag "${IMAGE_REF}:latest-dev-selkies" \
+              --tag "${IMAGE_REF}:sha-${SHORT_SHA}-dev-selkies" \
+              "${DEV_SELKIES_SOURCES[@]}"
+
+            docker buildx imagetools inspect "${IMAGE_REF}:latest-dev-selkies"
+            docker buildx imagetools inspect "${IMAGE_REF}:sha-${SHORT_SHA}-dev-selkies"
           fi
 
   update-description:
