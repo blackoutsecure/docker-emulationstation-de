@@ -1,9 +1,7 @@
 version: '2.4'
 services:
   emulationstation:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     environment:
       TZ: Etc/UTC
