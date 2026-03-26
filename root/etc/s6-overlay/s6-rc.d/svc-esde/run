@@ -131,6 +131,22 @@ if [[ -d "${esde_home}" ]]; then
   chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}" 2>/dev/null || true
 fi
 
+# --- Symlink external volume mounts into ES-DE's expected paths ---
+# docker-compose mounts /roms and /bios as named volumes, but ES-DE expects
+# ROMs under ${ESDE_HOME}/ROMs and BIOS files in emulator-specific paths.
+# Create symlinks so both locations work seamlessly.
+if [[ -d /roms && ! -e "${esde_home}/ROMs" ]]; then
+  ln -s /roms "${esde_home}/ROMs"
+  chown -h "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}/ROMs"
+  echo "[svc-esde] Linked /roms -> ${esde_home}/ROMs"
+fi
+if [[ -d /bios && ! -e "${esde_home}/.emulationstation/bios" ]]; then
+  mkdir -p "${esde_home}/.emulationstation"
+  ln -s /bios "${esde_home}/.emulationstation/bios"
+  chown -h "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}/.emulationstation" "${esde_home}/.emulationstation/bios"
+  echo "[svc-esde] Linked /bios -> ${esde_home}/.emulationstation/bios"
+fi
+
 # --- Log forwarding to stdout (for balena / docker logs) ---
 # ES-DE and Xorg write to files, not stdout. Tail them in the background
 # so their output appears in `balena logs` / `docker logs`.
@@ -161,9 +177,10 @@ start_log_tailers() {
   esde_log="${esde_log:-${esde_log_candidates[0]}}"
   echo "[svc-esde] Tailing ES-DE log: ${esde_log}"
 
-  tail -F "${esde_log}" 2>/dev/null | sed --unbuffered 's/^/[es-de] /' &
+  # Use -n 0 to skip existing content and only show new lines from this session
+  tail -n 0 -F "${esde_log}" 2>/dev/null | sed --unbuffered 's/^/[es-de] /' &
   _log_pids+=("$!")
-  tail -F "${xorg_log}" 2>/dev/null | sed --unbuffered 's/^/[Xorg] /' &
+  tail -n 0 -F "${xorg_log}" 2>/dev/null | sed --unbuffered 's/^/[Xorg] /' &
   _log_pids+=("$!")
 }
 
@@ -183,13 +200,31 @@ echo "[svc-esde] Launch target is local device graphics output; no web console o
 # Non-balena base images do not auto-start udev; we must do it ourselves.
 # Without a running udevd, Xorg cannot hotplug-discover input devices.
 # In balena, io.balena.features.dbus mounts the socket at /run/dbus/system_bus_socket
-# and sets DBUS_SYSTEM_BUS_ADDRESS automatically. For non-balena, start our own dbus
-# daemon so Xorg and ES-DE have a functioning system bus.
-if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
-  if [[ -S /run/dbus/system_bus_socket ]]; then
-    export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
-  elif command -v dbus-daemon >/dev/null 2>&1; then
-    # Ensure dbus system config and machine-id exist
+# and sets DBUS_SYSTEM_BUS_ADDRESS automatically. However, if /run is a tmpfs the
+# socket may be wiped. Verify the socket actually exists; start our own daemon if not.
+
+_dbus_socket="/run/dbus/system_bus_socket"
+_need_dbus=true
+
+# Check if an existing dbus socket is reachable
+if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
+  # Extract path from unix:path=... format
+  _configured_socket="${DBUS_SYSTEM_BUS_ADDRESS#unix:path=}"
+  if [[ -S "${_configured_socket}" ]]; then
+    echo "[svc-esde] D-Bus system bus already available at ${_configured_socket}"
+    _need_dbus=false
+  else
+    echo "[svc-esde] DBUS_SYSTEM_BUS_ADDRESS is set but socket ${_configured_socket} does not exist; will start our own." >&2
+    unset DBUS_SYSTEM_BUS_ADDRESS
+  fi
+elif [[ -S "${_dbus_socket}" ]]; then
+  export DBUS_SYSTEM_BUS_ADDRESS="unix:path=${_dbus_socket}"
+  echo "[svc-esde] D-Bus system bus found at ${_dbus_socket}"
+  _need_dbus=false
+fi
+
+if ${_need_dbus}; then
+  if command -v dbus-daemon >/dev/null 2>&1; then
     if [[ ! -f /usr/share/dbus-1/system.conf ]]; then
       echo "[svc-esde] Warning: /usr/share/dbus-1/system.conf not found. Install 'dbus' package." >&2
       echo "[svc-esde]   Skipping dbus-daemon start; Xorg will log dbus-core errors (harmless but noisy)." >&2
@@ -200,17 +235,19 @@ if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
       mkdir -p /run/dbus
       dbus-daemon --system --nofork --nopidfile 2>&1 | sed --unbuffered 's/^/[dbus] /' &
       # Wait briefly for the socket to appear
-      for _i in $(seq 1 20); do
-        [[ -S /run/dbus/system_bus_socket ]] && break
+      for _i in $(seq 1 30); do
+        [[ -S "${_dbus_socket}" ]] && break
         sleep 0.1
       done
-      if [[ -S /run/dbus/system_bus_socket ]]; then
-        export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+      if [[ -S "${_dbus_socket}" ]]; then
+        export DBUS_SYSTEM_BUS_ADDRESS="unix:path=${_dbus_socket}"
         echo "[svc-esde] Started dbus-daemon; system bus available."
       else
-        echo "[svc-esde] Warning: dbus-daemon started but socket not found." >&2
+        echo "[svc-esde] Warning: dbus-daemon started but socket not found after 3s." >&2
       fi
     fi
+  else
+    echo "[svc-esde] Warning: dbus-daemon not installed. Xorg will log dbus-core errors." >&2
   fi
 fi
 
@@ -255,7 +292,11 @@ if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
     startx_server_args+=( -verbose 3 )
   fi
   start_log_tailers
-  startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}" 2>&1 | sed --unbuffered 's/^/[startx] /'
+  # Xorg detailed output is already captured by the [Xorg] log tailer from the log file.
+  # Filter startx output to only show non-Xorg messages (startx wrapper, xinit, errors).
+  startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}" 2>&1 \
+    | grep -v --line-buffered -E '^\(([=-][=-]|[*][*]|\!\!|\?\?|II|WW|EE|NI)\)|^X\.Org X Server|^X Protocol Version|^Current Operating System|^Kernel command line|^xorg-server |^Current version of pixman|^[[:space:]]*(Before reporting|to make sure)|^Markers:|^[[:space:]]*\(' \
+    | sed --unbuffered 's/^/[startx] /'
   exit ${PIPESTATUS[0]}
 fi
 
