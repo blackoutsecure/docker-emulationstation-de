@@ -16,7 +16,7 @@ post-provisioning: >-
         - TZ=Etc/UTC
         - DISPLAY_NUM=0
         - XDG_RUNTIME_DIR=/run/esde
-        - ESDE_USE_INTERNAL_X=1
+        - ESDE_VIDEO_DRIVER=kmsdrm
         - UDEV=1
         # - ESDE_ARGS=          # Optional: extra flags for es-de
         # - APP_USER=abc        # Optional: container user (default: abc)

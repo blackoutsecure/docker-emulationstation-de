@@ -321,7 +321,57 @@ if ${_need_dbus}; then
   fi
 fi
 
-if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
+# --- Video driver selection ---
+# ESDE_VIDEO_DRIVER controls how ES-DE accesses the display:
+#   kmsdrm  - Direct DRM/KMS (no X11). Best for SBCs like Raspberry Pi.
+#   x11     - Start internal Xorg (legacy ESDE_USE_INTERNAL_X=1 path).
+#   auto    - Auto-detect: prefer kmsdrm if /dev/dri/card0 exists.
+# Falls through to external X11 socket if none of the above match.
+_video_driver="${ESDE_VIDEO_DRIVER:-auto}"
+if [[ "${_video_driver}" = "auto" ]]; then
+  if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
+    _video_driver="x11"
+  elif [[ -e /dev/dri/card0 ]]; then
+    _video_driver="kmsdrm"
+  fi
+fi
+echo "[svc-esde] Video driver selection: ESDE_VIDEO_DRIVER=${ESDE_VIDEO_DRIVER:-<unset>}, resolved to '${_video_driver}'"
+
+if [[ "${_video_driver}" = "kmsdrm" ]]; then
+  echo "[svc-esde] Using KMSDRM video driver (direct to display, no Xorg)."
+  export SDL_VIDEODRIVER=kmsdrm
+
+  # Prevent SDL2 from falling back to X11 or being confused by X11 env vars.
+  unset DISPLAY 2>/dev/null || true
+  unset XAUTHORITY 2>/dev/null || true
+
+  # Log DRM devices for diagnostics
+  if [[ -d /dev/dri ]]; then
+    echo "[svc-esde] DRM devices: $(ls /dev/dri/ 2>/dev/null | tr '\n' ' ')"
+  else
+    echo "[svc-esde] Error: /dev/dri not found. KMSDRM requires GPU passthrough." >&2
+  fi
+
+  # KMSDRM needs direct VT access; ensure we have a usable VT.
+  # SDL2 will open /dev/tty and issue VT_* ioctls.
+  if [[ ! -e /dev/tty0 ]]; then
+    echo "[svc-esde] Warning: /dev/tty0 not found. KMSDRM may fail without VT access." >&2
+    echo "[svc-esde]   Ensure the container runs with --privileged or has /dev/tty* access." >&2
+  fi
+
+  # KMSDRM requires DRM master (drmSetMaster ioctl), which needs root or
+  # CAP_SYS_ADMIN. s6-setuidgid drops all capabilities, so es-de must run
+  # as root for KMSDRM. This is acceptable for a dedicated appliance container.
+  # The es-de home directory still needs to be writable.
+  chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}" 2>/dev/null || true
+
+  start_log_tailers
+  echo "[svc-esde] Launching ES-DE via KMSDRM as root (DRM master requires root/CAP_SYS_ADMIN)."
+  /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
+  exit ${PIPESTATUS[0]}
+fi
+
+if [[ "${_video_driver}" = "x11" || "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
   echo "[svc-esde] Starting internal Xorg session via startx (as root for VT management)."
 
   # Clean stale X lock/socket files from a previous crash to prevent startx failure
@@ -355,7 +405,7 @@ if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
 fi
 
 if [[ ! -S /tmp/.X11-unix/X${DISPLAY#:} ]]; then
-  echo "[svc-esde] X11 socket /tmp/.X11-unix/X${DISPLAY#:} is not available. Mount /tmp/.X11-unix from the host or set ESDE_USE_INTERNAL_X=1." >&2
+  echo "[svc-esde] X11 socket /tmp/.X11-unix/X${DISPLAY#:} is not available. Mount /tmp/.X11-unix from the host, set ESDE_VIDEO_DRIVER=x11, or set ESDE_VIDEO_DRIVER=kmsdrm." >&2
   sleep infinity
 fi
 
