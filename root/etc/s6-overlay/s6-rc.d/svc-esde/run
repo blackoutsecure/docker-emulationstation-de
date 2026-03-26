@@ -245,9 +245,11 @@ _dbus_socket_alive() {
   local sock="$1"
   [[ -S "${sock}" ]] || return 1
   if command -v dbus-send >/dev/null 2>&1; then
+    # Use GetId instead of Peer.Ping; the default system bus policy denies
+    # Peer.Ping to the bus daemon itself, producing noisy "Rejected send" logs.
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=${sock}" \
       dbus-send --system --dest=org.freedesktop.DBus --print-reply /org/freedesktop/DBus \
-        org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1
+        org.freedesktop.DBus.GetId >/dev/null 2>&1
   else
     # No dbus-send available; fall back to file-type check only
     return 0

@@ -140,6 +140,7 @@ RUN echo "**** install runtime dependencies ****" && \
       libxkbcommon0 \
       libpoppler-cpp0t64 \
       libgles2 \
+      libgl1-mesa-dri \
       udev \
       dbus \
       dbus-daemon \
