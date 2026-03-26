@@ -125,6 +125,33 @@ fi
 esde_home="${ESDE_HOME:-/config}"
 read -r -a extra_args <<< "${ESDE_ARGS:-}"
 
+# --- Log forwarding to stdout (for balena / docker logs) ---
+# ES-DE and Xorg write to files, not stdout. Tail them in the background
+# so their output appears in `balena logs` / `docker logs`.
+_log_pids=()
+start_log_tailers() {
+  local esde_log="${esde_home}/logs/es_log.txt"
+  local xorg_log="/var/log/Xorg.${display_num}.log"
+
+  # Ensure the ES-DE log directory exists so tail -F can watch for creation
+  mkdir -p "${esde_home}/logs"
+  chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}/logs"
+
+  tail -F "${esde_log}" 2>/dev/null | sed --unbuffered 's/^/[es-de] /' &
+  _log_pids+=("$!")
+  tail -F "${xorg_log}" 2>/dev/null | sed --unbuffered 's/^/[Xorg] /' &
+  _log_pids+=("$!")
+}
+
+cleanup_log_tailers() {
+  for pid in "${_log_pids[@]}"; do
+    kill "${pid}" 2>/dev/null || true
+  done
+  # Also kill any tail children spawned in the pipelines
+  jobs -p 2>/dev/null | xargs -r kill 2>/dev/null || true
+}
+trap cleanup_log_tailers EXIT
+
 echo "[svc-esde] Starting ES-DE with DISPLAY=${DISPLAY}, XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}, and home=${esde_home}"
 echo "[svc-esde] Launch target is local device graphics output; no web console or HTTP port is exposed by this image."
 
@@ -179,7 +206,9 @@ if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
   if [[ "${ESDE_XORG_VERBOSE:-0}" = "1" ]]; then
     startx_server_args+=( -verbose 3 )
   fi
-  exec startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}"
+  start_log_tailers
+  startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}"
+  exit $?
 fi
 
 if [[ ! -S /tmp/.X11-unix/X${DISPLAY#:} ]]; then
@@ -187,8 +216,10 @@ if [[ ! -S /tmp/.X11-unix/X${DISPLAY#:} ]]; then
   sleep infinity
 fi
 
+start_log_tailers
 if [[ -z ${LSIO_NON_ROOT_USER:-} ]]; then
-  exec s6-setuidgid "${APP_USER}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+  s6-setuidgid "${APP_USER}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
 else
-  exec /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+  /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
 fi
+exit $?
