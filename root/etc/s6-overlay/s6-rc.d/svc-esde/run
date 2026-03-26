@@ -125,17 +125,41 @@ fi
 esde_home="${ESDE_HOME:-/config}"
 read -r -a extra_args <<< "${ESDE_ARGS:-}"
 
+# Ensure the ES-DE home directory is writable by the application user
+# so ES-DE can create subdirectories such as ROMs, gamelists, etc.
+if [[ -d "${esde_home}" ]]; then
+  chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}" 2>/dev/null || true
+fi
+
 # --- Log forwarding to stdout (for balena / docker logs) ---
 # ES-DE and Xorg write to files, not stdout. Tail them in the background
 # so their output appears in `balena logs` / `docker logs`.
 _log_pids=()
 start_log_tailers() {
-  local esde_log="${esde_home}/logs/es_log.txt"
   local xorg_log="/var/log/Xorg.${display_num}.log"
 
   # Ensure the ES-DE log directory exists so tail -F can watch for creation
   mkdir -p "${esde_home}/logs"
   chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}/logs"
+
+  # ES-DE may write its log to different paths depending on version and config.
+  # Search known locations; fall back to the standard path for tail -F to watch.
+  local esde_log=""
+  local -a esde_log_candidates=(
+    "${esde_home}/logs/es_log.txt"
+    "${esde_home}/.emulationstation-de/es_log.txt"
+    "${esde_home}/ES-DE/logs/es_log.txt"
+    "${esde_home}/es_log.txt"
+  )
+  for _candidate in "${esde_log_candidates[@]}"; do
+    if [[ -f "${_candidate}" ]]; then
+      esde_log="${_candidate}"
+      break
+    fi
+  done
+  # If no existing log file found, watch the standard path for creation
+  esde_log="${esde_log:-${esde_log_candidates[0]}}"
+  echo "[svc-esde] Tailing ES-DE log: ${esde_log}"
 
   tail -F "${esde_log}" 2>/dev/null | sed --unbuffered 's/^/[es-de] /' &
   _log_pids+=("$!")
@@ -159,10 +183,25 @@ echo "[svc-esde] Launch target is local device graphics output; no web console o
 # Non-balena base images do not auto-start udev; we must do it ourselves.
 # Without a running udevd, Xorg cannot hotplug-discover input devices.
 # In balena, io.balena.features.dbus mounts the socket at /run/dbus/system_bus_socket
-# and sets DBUS_SYSTEM_BUS_ADDRESS automatically. For non-balena, detect if available.
+# and sets DBUS_SYSTEM_BUS_ADDRESS automatically. For non-balena, start our own dbus
+# daemon so Xorg and ES-DE have a functioning system bus.
 if [[ -z "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
   if [[ -S /run/dbus/system_bus_socket ]]; then
     export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+  elif command -v dbus-daemon >/dev/null 2>&1; then
+    mkdir -p /run/dbus
+    dbus-daemon --system --nofork --nopidfile 2>&1 | sed --unbuffered 's/^/[dbus] /' &
+    # Wait briefly for the socket to appear
+    for _i in $(seq 1 20); do
+      [[ -S /run/dbus/system_bus_socket ]] && break
+      sleep 0.1
+    done
+    if [[ -S /run/dbus/system_bus_socket ]]; then
+      export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+      echo "[svc-esde] Started dbus-daemon; system bus available."
+    else
+      echo "[svc-esde] Warning: dbus-daemon started but socket not found." >&2
+    fi
   fi
 fi
 
@@ -207,8 +246,8 @@ if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
     startx_server_args+=( -verbose 3 )
   fi
   start_log_tailers
-  startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}"
-  exit $?
+  startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}" 2>&1 | sed --unbuffered 's/^/[startx] /'
+  exit ${PIPESTATUS[0]}
 fi
 
 if [[ ! -S /tmp/.X11-unix/X${DISPLAY#:} ]]; then
@@ -218,8 +257,9 @@ fi
 
 start_log_tailers
 if [[ -z ${LSIO_NON_ROOT_USER:-} ]]; then
-  s6-setuidgid "${APP_USER}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+  s6-setuidgid "${APP_USER}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
+  exit ${PIPESTATUS[0]}
 else
-  /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}"
+  /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
+  exit ${PIPESTATUS[0]}
 fi
-exit $?
