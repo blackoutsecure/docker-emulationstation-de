@@ -149,8 +149,7 @@ RUN echo "**** install runtime dependencies ****" && \
       xinput \
       xfonts-base \
       xfonts-100dpi \
-      xfonts-75dpi \
-      xfonts-cyrillic && \
+      xfonts-75dpi && \
   echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \
