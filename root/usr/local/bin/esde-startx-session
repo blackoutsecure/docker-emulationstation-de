@@ -10,6 +10,11 @@ fi
 
 export XAUTHORITY="${XAUTHORITY:-${XDG_RUNTIME_DIR}/.Xauthority}"
 
+# Force SDL2 to use EGL instead of GLX on X11.
+# The Raspberry Pi V3D GPU exposes GLES contexts via EGL but does not
+# provide valid desktop-GL FBConfigs via GLX, causing GLXBadFBConfig.
+export SDL_VIDEO_X11_FORCE_EGL="${SDL_VIDEO_X11_FORCE_EGL:-1}"
+
 mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 700 "${XDG_RUNTIME_DIR}"
 chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${XDG_RUNTIME_DIR}"
