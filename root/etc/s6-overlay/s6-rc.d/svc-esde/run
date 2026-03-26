@@ -147,6 +147,24 @@ if [[ -d /bios && ! -e "${esde_home}/.emulationstation/bios" ]]; then
   echo "[svc-esde] Linked /bios -> ${esde_home}/.emulationstation/bios"
 fi
 
+# --- Pre-create ROM directory structure ---
+# ES-DE shows a first-run "create directories?" wizard when the ROMs directory
+# has no system subdirectories. After the user clicks "create", ES-DE loops back
+# to the same wizard because there are still 0 games. Pre-creating the structure
+# avoids this; ES-DE will instead show the normal empty-gamelist screen.
+_roms_dir="${esde_home}/ROMs"
+if [[ -d "${_roms_dir}" ]]; then
+  _subdir_count="$(find "${_roms_dir}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+  if [[ "${_subdir_count}" -eq 0 ]]; then
+    echo "[svc-esde] ROM directory is empty; pre-creating system directories..."
+    if s6-setuidgid "${APP_USER:-abc}" /usr/local/bin/es-de --create-system-dirs --home "${esde_home}" >/dev/null 2>&1; then
+      echo "[svc-esde] System directories created successfully."
+    else
+      echo "[svc-esde] Warning: --create-system-dirs failed; ES-DE will prompt on first launch." >&2
+    fi
+  fi
+fi
+
 # --- Log forwarding to stdout (for balena / docker logs) ---
 # ES-DE and Xorg write to files, not stdout. Tail them in the background
 # so their output appears in `balena logs` / `docker logs`.
@@ -206,21 +224,39 @@ echo "[svc-esde] Launch target is local device graphics output; no web console o
 _dbus_socket="/run/dbus/system_bus_socket"
 _need_dbus=true
 
+# _dbus_socket_alive: verify a D-Bus socket is actually responding, not just present on disk.
+# A stale or bind-mounted socket file can exist without a listening daemon, causing Xorg to
+# spam "dbus-core: error connecting to system bus" every 10 seconds.
+_dbus_socket_alive() {
+  local sock="$1"
+  [[ -S "${sock}" ]] || return 1
+  if command -v dbus-send >/dev/null 2>&1; then
+    DBUS_SYSTEM_BUS_ADDRESS="unix:path=${sock}" \
+      dbus-send --system --dest=org.freedesktop.DBus --print-reply /org/freedesktop/DBus \
+        org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1
+  else
+    # No dbus-send available; fall back to file-type check only
+    return 0
+  fi
+}
+
 # Check if an existing dbus socket is reachable
 if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
   # Extract path from unix:path=... format
   _configured_socket="${DBUS_SYSTEM_BUS_ADDRESS#unix:path=}"
-  if [[ -S "${_configured_socket}" ]]; then
+  if _dbus_socket_alive "${_configured_socket}"; then
     echo "[svc-esde] D-Bus system bus already available at ${_configured_socket}"
     _need_dbus=false
   else
-    echo "[svc-esde] DBUS_SYSTEM_BUS_ADDRESS is set but socket ${_configured_socket} does not exist; will start our own." >&2
+    echo "[svc-esde] DBUS_SYSTEM_BUS_ADDRESS is set but socket ${_configured_socket} is not responding; will start our own." >&2
     unset DBUS_SYSTEM_BUS_ADDRESS
   fi
-elif [[ -S "${_dbus_socket}" ]]; then
+elif _dbus_socket_alive "${_dbus_socket}"; then
   export DBUS_SYSTEM_BUS_ADDRESS="unix:path=${_dbus_socket}"
   echo "[svc-esde] D-Bus system bus found at ${_dbus_socket}"
   _need_dbus=false
+elif [[ -S "${_dbus_socket}" ]]; then
+  echo "[svc-esde] D-Bus socket exists at ${_dbus_socket} but is not responding; will start our own." >&2
 fi
 
 if ${_need_dbus}; then
