@@ -82,6 +82,13 @@ RUN git clone --depth "${ESDE_GIT_DEPTH}" --branch "${ESDE_VERSION}" \
       DESTDIR="${BUILD_OUTPUT_DIR}" cmake --install /tmp/esde/build; \
     fi
 
+# --- Download bundled homebrew ROMs ---
+# "Libbet and the Magic Floor" by Damian Yerrick (pinobatch) - zlib license
+# Source: https://github.com/pinobatch/libbet  License: zlib
+RUN mkdir -p "${BUILD_OUTPUT_DIR}/defaults/roms/gb" && \
+    curl -fsSL -o "${BUILD_OUTPUT_DIR}/defaults/roms/gb/Libbet and the Magic Floor.gb" \
+      https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb
+
 FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -149,7 +156,9 @@ RUN echo "**** install runtime dependencies ****" && \
       xinput \
       xfonts-base \
       xfonts-100dpi \
-      xfonts-75dpi && \
+      xfonts-75dpi \
+      xfonts-cyrillic \
+      xfonts-scalable && \
   echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \
@@ -158,9 +167,11 @@ RUN echo "**** install runtime dependencies ****" && \
       /var/tmp/*
 
 COPY --from=builder /out/usr/local/ /usr/local/
+COPY --from=builder /out/defaults/roms/ /defaults/roms/
 
 COPY /root/usr/local/bin/esde-startx-session /usr/local/bin/esde-startx-session
 COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
+COPY /root/defaults/roms/LICENSE-bundled-roms.txt /defaults/roms/LICENSE-bundled-roms.txt
 
 RUN set -eux; \
   echo "**** record build version ****"; \

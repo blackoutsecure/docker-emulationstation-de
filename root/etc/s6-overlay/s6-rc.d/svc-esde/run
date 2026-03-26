@@ -147,6 +147,20 @@ if [[ -d /bios && ! -e "${esde_home}/.emulationstation/bios" ]]; then
   echo "[svc-esde] Linked /bios -> ${esde_home}/.emulationstation/bios"
 fi
 
+# --- Seed bundled demo ROMs on first boot ---
+# /defaults/roms/ ships with the image and contains freely-licensed homebrew.
+# Copy them into /roms (the volume) only if the volume is completely empty,
+# so user-supplied content is never overwritten.
+if [[ -d /defaults/roms && -d /roms ]]; then
+  _rom_file_count="$(find /roms -mindepth 1 -maxdepth 2 -type f \( -name '*.gb' -o -name '*.gbc' -o -name '*.nes' -o -name '*.sfc' -o -name '*.smc' -o -name '*.bin' -o -name '*.zip' -o -name '*.7z' \) 2>/dev/null | wc -l)"
+  if [[ "${_rom_file_count}" -eq 0 ]]; then
+    echo "[svc-esde] No ROM files found in /roms; seeding bundled demo ROMs..."
+    cp -rn /defaults/roms/* /roms/ 2>/dev/null || true
+    chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" /roms/ 2>/dev/null || true
+    echo "[svc-esde] Bundled demo ROMs copied to /roms. Add your own ROMs to replace them."
+  fi
+fi
+
 # --- Pre-create ROM directory structure ---
 # ES-DE shows a first-run "create directories?" wizard when the ROMs directory
 # has no system subdirectories. After the user clicks "create", ES-DE loops back
@@ -270,16 +284,16 @@ if ${_need_dbus}; then
       fi
       mkdir -p /run/dbus
       dbus-daemon --system --nofork --nopidfile 2>&1 | sed --unbuffered 's/^/[dbus] /' &
-      # Wait briefly for the socket to appear
-      for _i in $(seq 1 30); do
-        [[ -S "${_dbus_socket}" ]] && break
+      # Wait for the socket to appear AND the daemon to respond to pings
+      for _i in $(seq 1 50); do
+        _dbus_socket_alive "${_dbus_socket}" && break
         sleep 0.1
       done
-      if [[ -S "${_dbus_socket}" ]]; then
+      if _dbus_socket_alive "${_dbus_socket}"; then
         export DBUS_SYSTEM_BUS_ADDRESS="unix:path=${_dbus_socket}"
         echo "[svc-esde] Started dbus-daemon; system bus available."
       else
-        echo "[svc-esde] Warning: dbus-daemon started but socket not found after 3s." >&2
+        echo "[svc-esde] Warning: dbus-daemon started but not responding after 5s." >&2
       fi
     fi
   else
