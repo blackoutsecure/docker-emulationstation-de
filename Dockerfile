@@ -157,7 +157,6 @@ RUN echo "**** install runtime dependencies ****" && \
       xfonts-base \
       xfonts-100dpi \
       xfonts-75dpi \
-      xfonts-cyrillic \
       xfonts-scalable && \
   echo "**** cleanup ****" && \
     apt-get clean && \
@@ -174,6 +173,8 @@ COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
 COPY /root/defaults/roms/LICENSE-bundled-roms.txt /defaults/roms/LICENSE-bundled-roms.txt
 
 RUN set -eux; \
+  echo "**** suppress Xorg font path warnings ****"; \
+  mkdir -p /usr/share/fonts/X11/cyrillic; \
   echo "**** record build version ****"; \
   if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi; \
   echo "Linuxserver.io version:- ${VERSION:-unknown} Build-date:- ${BUILD_DATE:-unknown} Revision:- ${VCS_REF:-unknown} ES-DE:- ${ESDE_VERSION:-unknown}" > /build_version; \
