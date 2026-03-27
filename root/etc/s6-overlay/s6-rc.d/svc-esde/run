@@ -341,6 +341,10 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
   echo "[svc-esde] Using KMSDRM video driver (direct to display, no Xorg)."
   export SDL_VIDEODRIVER=kmsdrm
 
+  # Force SDL2 to use EGL/GLES instead of desktop GL.
+  # Required for GPUs that only expose GLES (e.g. Raspberry Pi V3D, Mali).
+  export SDL_OPENGL_ES_DRIVER=1
+
   # Prevent SDL2 from falling back to X11 or being confused by X11 env vars.
   unset DISPLAY 2>/dev/null || true
   unset XAUTHORITY 2>/dev/null || true
@@ -359,6 +363,11 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
     echo "[svc-esde]   Ensure the container runs with --privileged or has /dev/tty* access." >&2
   fi
 
+  # Raspberry Pi DRM architecture: card0 = vc4 display controller (GLES 2.0 only),
+  # card1 = v3d GPU (GLES 3.1). When EGL creates a context on card0's GBM device
+  # it may fail with EGL_BAD_MATCH because vc4 cannot provide the requested GLES
+  # version. Detect this and fall back to X11 automatically.
+
   # KMSDRM requires DRM master (drmSetMaster ioctl), which needs root or
   # CAP_SYS_ADMIN. s6-setuidgid drops all capabilities, so es-de must run
   # as root for KMSDRM. This is acceptable for a dedicated appliance container.
@@ -368,7 +377,18 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
   start_log_tailers
   echo "[svc-esde] Launching ES-DE via KMSDRM as root (DRM master requires root/CAP_SYS_ADMIN)."
   /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
-  exit ${PIPESTATUS[0]}
+  _kmsdrm_rc=${PIPESTATUS[0]}
+  cleanup_log_tailers
+
+  if [[ ${_kmsdrm_rc} -eq 0 ]]; then
+    exit 0
+  fi
+
+  echo "[svc-esde] KMSDRM launch failed (exit code ${_kmsdrm_rc}). Falling back to X11 (Xorg)." >&2
+  unset SDL_VIDEODRIVER SDL_OPENGL_ES_DRIVER
+  export DISPLAY=":${display_num}"
+  _video_driver="x11"
+  # Fall through to X11 section below
 fi
 
 if [[ "${_video_driver}" = "x11" || "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
