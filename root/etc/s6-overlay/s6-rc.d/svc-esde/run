@@ -327,7 +327,59 @@ fi
 #   x11     - Start internal Xorg (legacy ESDE_USE_INTERNAL_X=1 path).
 #   auto    - Auto-detect: prefer kmsdrm if /dev/dri/card0 exists.
 # Falls through to external X11 socket if none of the above match.
+
+# --- Raspberry Pi detection ---
+# RPi4/5 uses a split-render DRM architecture: card0 = vc4 display controller
+# (has HDMI connectors but cannot create GLES contexts), card1 = v3d GPU (does
+# GLES 3.1 but has no display connectors). SDL2 KMSDRM opens card0 for its
+# connectors, then tries to create an EGL/GLES context on it, which fails with
+# EGL_BAD_MATCH because vc4 doesn't support context creation.
+# KMSDRM will *never* work on RPi with this split architecture; X11 with the
+# modesetting driver + glamor is the correct path.
+_is_rpi=false
+# Method 1: device-tree model string (most reliable, works in privileged containers)
+if [[ -r /proc/device-tree/model ]]; then
+  _dt_model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)" || true
+  if [[ "${_dt_model}" == *"Raspberry Pi"* ]]; then
+    _is_rpi=true
+    echo "[svc-esde] Detected Raspberry Pi hardware: ${_dt_model}"
+  fi
+fi
+# Method 2: sysfs DRM driver name
+if ! ${_is_rpi}; then
+  for _card in /dev/dri/card*; do
+    [[ -e "${_card}" ]] || continue
+    _card_name="$(basename "${_card}")"
+    _drv_link="/sys/class/drm/${_card_name}/device/driver"
+    if [[ -L "${_drv_link}" ]]; then
+      _drv_name="$(basename "$(readlink -f "${_drv_link}")")"
+      if [[ "${_drv_name}" = "vc4-drm" || "${_drv_name}" = "vc4" ]]; then
+        _is_rpi=true
+        echo "[svc-esde] Detected vc4 DRM driver on ${_card_name} (Raspberry Pi)."
+        break
+      fi
+    fi
+  done
+fi
+# Method 3: ALSA card names containing "vc4hdmi" (available even without sysfs)
+if ! ${_is_rpi} && [[ -r /proc/asound/cards ]]; then
+  if grep -qi 'vc4hdmi\|vc4-hdmi' /proc/asound/cards 2>/dev/null; then
+    _is_rpi=true
+    echo "[svc-esde] Detected Raspberry Pi via ALSA card names (vc4-hdmi)."
+  fi
+fi
+
 _video_driver="${ESDE_VIDEO_DRIVER:-auto}"
+
+# On Raspberry Pi, force X11 — KMSDRM cannot work with the split vc4+v3d DRM.
+if ${_is_rpi}; then
+  if [[ "${_video_driver}" = "kmsdrm" ]]; then
+    echo "[svc-esde] WARNING: ESDE_VIDEO_DRIVER=kmsdrm is set but Raspberry Pi vc4+v3d split-render"
+    echo "[svc-esde]   architecture does not support KMSDRM (EGL_BAD_MATCH). Overriding to x11."
+  fi
+  _video_driver="x11"
+fi
+
 if [[ "${_video_driver}" = "auto" ]]; then
   if [[ "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
     _video_driver="x11"
@@ -363,10 +415,8 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
     echo "[svc-esde]   Ensure the container runs with --privileged or has /dev/tty* access." >&2
   fi
 
-  # Raspberry Pi DRM architecture: card0 = vc4 display controller (GLES 2.0 only),
-  # card1 = v3d GPU (GLES 3.1). When EGL creates a context on card0's GBM device
-  # it may fail with EGL_BAD_MATCH because vc4 cannot provide the requested GLES
-  # version. Detect this and fall back to X11 automatically.
+  # Raspberry Pi split-render detection was already handled above;
+  # if we reach here, KMSDRM should be viable for this GPU.
 
   # KMSDRM requires DRM master (drmSetMaster ioctl), which needs root or
   # CAP_SYS_ADMIN. s6-setuidgid drops all capabilities, so es-de must run
@@ -376,8 +426,11 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
 
   start_log_tailers
   echo "[svc-esde] Launching ES-DE via KMSDRM as root (DRM master requires root/CAP_SYS_ADMIN)."
+  # Temporarily disable errexit so the fallback to X11 can trigger on failure.
+  set +eo pipefail
   /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
   _kmsdrm_rc=${PIPESTATUS[0]}
+  set -eo pipefail
   cleanup_log_tailers
 
   if [[ ${_kmsdrm_rc} -eq 0 ]]; then
