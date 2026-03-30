@@ -171,6 +171,7 @@ jobs:
             base_name: linuxserver/baseimage-ubuntu
             base_variant: noble
             base_id: default
+            gles: 'off'
           - channel: stable
             arch: arm64
             runner: ubuntu-latest-arm64
@@ -178,6 +179,7 @@ jobs:
             base_name: linuxserver/baseimage-ubuntu
             base_variant: noble
             base_id: default
+            gles: 'on'
           - channel: dev
             arch: amd64
             runner: ubuntu-latest
@@ -185,6 +187,7 @@ jobs:
             base_name: linuxserver/baseimage-ubuntu
             base_variant: noble
             base_id: default
+            gles: 'off'
           - channel: dev
             arch: arm64
             runner: ubuntu-latest-arm64
@@ -192,6 +195,7 @@ jobs:
             base_name: linuxserver/baseimage-ubuntu
             base_variant: noble
             base_id: default
+            gles: 'on'
           # Selkies base image (linuxserver/baseimage-selkies:ubuntunoble)
           - channel: stable
             arch: amd64
@@ -200,6 +204,7 @@ jobs:
             base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
+            gles: 'off'
           - channel: stable
             arch: arm64
             runner: ubuntu-latest-arm64
@@ -207,6 +212,7 @@ jobs:
             base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
+            gles: 'on'
           - channel: dev
             arch: amd64
             runner: ubuntu-latest
@@ -214,6 +220,7 @@ jobs:
             base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
+            gles: 'off'
           - channel: dev
             arch: arm64
             runner: ubuntu-latest-arm64
@@ -221,6 +228,7 @@ jobs:
             base_name: linuxserver/baseimage-selkies
             base_variant: ubuntunoble
             base_id: selkies
+            gles: 'on'
 
     steps:
       - name: Skip if channel not selected
@@ -290,7 +298,7 @@ jobs:
             ESDE_STRIP_BINARIES=${{ steps.params.outputs.strip_binaries }}
             ESDE_APPLICATION_UPDATER=off
             ESDE_DEINIT_ON_LAUNCH=off
-            ESDE_GLES=off
+            ESDE_GLES=${{ matrix.gles }}
             ESDE_VIDEO_HW_DECODING=off
             VCS_URL=${{ env.REPO_URL }}
           labels: |
@@ -324,7 +332,7 @@ jobs:
             ESDE_STRIP_BINARIES=${{ steps.params.outputs.strip_binaries }}
             ESDE_APPLICATION_UPDATER=off
             ESDE_DEINIT_ON_LAUNCH=off
-            ESDE_GLES=off
+            ESDE_GLES=${{ matrix.gles }}
             ESDE_VIDEO_HW_DECODING=off
             VCS_URL=${{ env.REPO_URL }}
           labels: |
