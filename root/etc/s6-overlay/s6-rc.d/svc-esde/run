@@ -167,15 +167,18 @@ fi
 
 # --- Seed bundled demo ROMs on first boot ---
 # /defaults/roms/ ships with the image and contains freely-licensed homebrew.
-# Copy them into /roms (the volume) only if the volume is completely empty,
-# so user-supplied content is never overwritten.
-if [[ -d /defaults/roms && -d /roms ]]; then
-  _rom_file_count="$(find /roms -mindepth 1 -maxdepth 2 -type f \( -name '*.gb' -o -name '*.gbc' -o -name '*.nes' -o -name '*.sfc' -o -name '*.smc' -o -name '*.bin' -o -name '*.zip' -o -name '*.7z' \) 2>/dev/null | wc -l)"
+# Seed into ES-DE's actual ROM directory so ROMs are found regardless of
+# whether /roms is mounted or /config/ROMs is a symlink vs real directory.
+_esde_roms="${esde_home}/ROMs"
+if [[ -d /defaults/roms ]]; then
+  mkdir -p "${_esde_roms}"
+  chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_roms}" 2>/dev/null || true
+  _rom_file_count="$(find "${_esde_roms}" -mindepth 1 -maxdepth 2 -type f \( -name '*.gb' -o -name '*.gbc' -o -name '*.nes' -o -name '*.sfc' -o -name '*.smc' -o -name '*.bin' -o -name '*.zip' -o -name '*.7z' \) 2>/dev/null | wc -l)"
   if [[ "${_rom_file_count}" -eq 0 ]]; then
-    echo "[svc-esde] No ROM files found in /roms; seeding bundled demo ROMs..."
-    cp -rn /defaults/roms/* /roms/ 2>/dev/null || true
-    chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" /roms/ 2>/dev/null || true
-    echo "[svc-esde] Bundled demo ROMs copied to /roms. Add your own ROMs to replace them."
+    echo "[svc-esde] No ROM files found in ${_esde_roms}; seeding bundled demo ROMs..."
+    cp -rn /defaults/roms/* "${_esde_roms}/" 2>/dev/null || true
+    chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_roms}/" 2>/dev/null || true
+    echo "[svc-esde] Bundled demo ROMs copied to ${_esde_roms}. Add your own ROMs to replace them."
   fi
 fi
 
