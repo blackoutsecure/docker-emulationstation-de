@@ -1,0 +1,64 @@
+#!/usr/bin/with-contenv bash
+# init-esde-config — One-shot s6 service that prepares the ES-DE environment
+# before the Selkies desktop session starts.  Runs as root so it can fix
+# ownership, create symlinks on mounted volumes, and seed demo ROMs.
+set -euo pipefail
+
+app_user="${APP_USER:-abc}"
+esde_home="${ESDE_HOME:-/config}"
+
+echo "[init-esde-config] Preparing ES-DE environment (home=${esde_home})..."
+
+# --- Ensure home directory is writable by the app user ---
+if [[ -d "${esde_home}" ]]; then
+  chown "${app_user}":"${app_user}" "${esde_home}" 2>/dev/null || true
+fi
+
+# --- Symlink external volume mounts into ES-DE paths ---
+if [[ -d /roms && ! -e "${esde_home}/ROMs" ]]; then
+  ln -s /roms "${esde_home}/ROMs"
+  chown -h "${app_user}":"${app_user}" "${esde_home}/ROMs"
+  echo "[init-esde-config] Linked /roms -> ${esde_home}/ROMs"
+fi
+
+if [[ -d /bios && ! -e "${esde_home}/.emulationstation/bios" ]]; then
+  mkdir -p "${esde_home}/.emulationstation"
+  ln -s /bios "${esde_home}/.emulationstation/bios"
+  chown -h "${app_user}":"${app_user}" "${esde_home}/.emulationstation" \
+    "${esde_home}/.emulationstation/bios"
+  echo "[init-esde-config] Linked /bios -> ${esde_home}/.emulationstation/bios"
+fi
+
+# --- Seed bundled demo ROMs on first boot ---
+_esde_roms="${esde_home}/ROMs"
+if [[ -d /defaults/roms ]]; then
+  mkdir -p "${_esde_roms}"
+  chown "${app_user}":"${app_user}" "${_esde_roms}" 2>/dev/null || true
+
+  _rom_count="$(find "${_esde_roms}" -mindepth 1 -maxdepth 2 -type f \
+    \( -name '*.gb' -o -name '*.gbc' -o -name '*.nes' -o -name '*.sfc' \
+       -o -name '*.smc' -o -name '*.bin' -o -name '*.zip' -o -name '*.7z' \) \
+    2>/dev/null | wc -l)"
+
+  if [[ "${_rom_count}" -eq 0 ]]; then
+    echo "[init-esde-config] No ROMs found; seeding bundled demo ROMs..."
+    cp -rn /defaults/roms/* "${_esde_roms}/" 2>/dev/null || true
+    chown -R "${app_user}":"${app_user}" "${_esde_roms}/" 2>/dev/null || true
+  fi
+fi
+
+# --- Pre-create system directory structure ---
+if [[ -d "${_esde_roms}" ]]; then
+  _subdir_count="$(find "${_esde_roms}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+  if [[ "${_subdir_count}" -eq 0 ]]; then
+    echo "[init-esde-config] Pre-creating ES-DE system directories..."
+    s6-setuidgid "${app_user}" /usr/local/bin/es-de \
+      --create-system-dirs --home "${esde_home}" >/dev/null 2>&1 || true
+  fi
+fi
+
+# --- Fix volume ownership for /roms and /bios ---
+chown "${app_user}":"${app_user}" /roms 2>/dev/null || true
+chown "${app_user}":"${app_user}" /bios 2>/dev/null || true
+
+echo "[init-esde-config] ES-DE environment ready."

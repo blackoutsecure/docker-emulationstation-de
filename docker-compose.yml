@@ -1,6 +1,41 @@
-version: '2.4'
+# Consolidated docker-compose for EmulationStation-DE
+#
+# Two profiles — pick one:
+#   docker compose --profile default up -d     # Local display / kiosk
+#   docker compose --profile selkies up -d     # Selkies WebRTC streaming
+#
+# Build locally:
+#   docker compose --profile default build
+#   docker compose --profile selkies build
+
+x-common: &common
+  restart: unless-stopped
+  tmpfs:
+    - /var/tmp
+    - /run:exec
+  shm_size: 1gb
+  read_only: false
+  labels:
+    io.balena.features.kernel-modules: '1'
+    io.balena.features.firmware: '1'
+    io.balena.features.dbus: '1'
+  volumes:
+    - emulationstation-config:/config
+    - emulationstation-roms:/roms
+    - emulationstation-bios:/bios
+  devices:
+    - /dev/dri:/dev/dri
+
 services:
+  # ── Local display / kiosk ──────────────────────────────────────────
+  # Direct output to a connected monitor via KMSDRM or X11.
+  # Best for arcade cabinets, HTPC, and Balena with a physical display.
   emulationstation:
+    <<: *common
+    profiles: [default]
+    build:
+      context: .
+      target: default
     image: docker.io/blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     environment:
@@ -9,27 +44,56 @@ services:
       XDG_RUNTIME_DIR: /run/esde
       ESDE_VIDEO_DRIVER: 'kmsdrm'
       UDEV: '1'
-    volumes:
-      - emulationstation-config:/config
-      - emulationstation-roms:/roms
-      - emulationstation-bios:/bios
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
       - /dev/uinput:/dev/uinput
       - /dev/bus/usb:/dev/bus/usb
       - /dev/snd:/dev/snd
-    labels:
-      io.balena.features.kernel-modules: '1'
-      io.balena.features.firmware: '1'
-      io.balena.features.dbus: '1'
     privileged: true
-    tmpfs:
-      - /var/tmp
-      - /run:exec
-    shm_size: 1gb
-    read_only: false
-    restart: unless-stopped
+
+  # ── Selkies WebRTC streaming ───────────────────────────────────────
+  # Stream ES-DE to any web browser via WebRTC.
+  # Access at https://<host>:3001  (default user: abc / password: abc)
+  # Best for remote play, headless servers, and cloud deployments.
+  emulationstation-selkies:
+    <<: *common
+    profiles: [selkies]
+    build:
+      context: .
+      target: selkies
+    image: docker.io/blackoutsecure/emulationstation-de:latest-selkies
+    container_name: emulationstation-selkies
+    environment:
+      TZ: Etc/UTC
+      ESDE_HOME: /config
+      # ESDE_ARGS: ''                  # Optional extra flags for es-de
+      TITLE: EmulationStation-DE
+      NO_DECOR: 'true'                 # Fullscreen, no window borders
+      # --- Authentication (change these!) ---
+      CUSTOM_USER: abc
+      PASSWORD: abc
+      # --- Hardening (kiosk / appliance mode) ---
+      HARDEN_DESKTOP: 'true'           # Disables sudo, terminals, xdg-open
+      HARDEN_OPENBOX: 'true'           # Disables close button, right-click, Alt+F4
+      RESTART_APP: 'true'              # Auto-restart ES-DE if closed
+      START_DOCKER: 'false'            # No Docker-in-Docker needed
+      # --- Selkies Streaming ---
+      SELKIES_ENCODER: 'x264enc,jpeg'
+      SELKIES_FRAMERATE: '60'
+      SELKIES_AUDIO_ENABLED: 'true'
+      SELKIES_GAMEPAD_ENABLED: 'true'
+      # --- Selkies UI Tweaks (hide panels not needed for ES-DE) ---
+      SELKIES_UI_SIDEBAR_SHOW_FILES: 'false'
+      SELKIES_UI_SIDEBAR_SHOW_APPS: 'false'
+      SELKIES_UI_SIDEBAR_SHOW_CLIPBOARD: 'false'
+      SELKIES_FILE_TRANSFERS: 'none'
+      SELKIES_COMMAND_ENABLED: 'false'
+    ports:
+      - '3000:3000'   # HTTP
+      - '3001:3001'   # HTTPS (primary access)
+    security_opt:
+      - seccomp=unconfined
 
 volumes:
   emulationstation-config:

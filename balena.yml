@@ -1,43 +1,39 @@
 name: docker-emulationstation-de
 description: >-
-  LinuxServer.io style Ubuntu containerized build of EmulationStation-DE (ES-DE)
-  for local display and arcade-oriented hardware passthrough.
+  LinuxServer.io style Ubuntu containerized build of EmulationStation-DE (ES-DE).
+  Available in two variants: local-display (kiosk/arcade) and Selkies
+  (WebRTC remote access via web browser).  Both are defined in a single
+  docker-compose.yml and selected via Compose profiles.
 
 post-provisioning: >-
-  ## Usage instructions
+  ## Quick Start
 
-  Include this snippet in your docker-compose.yml file under 'services':
+  Both variants live in one docker-compose.yml — pick a profile:
 
-    ```
-    emulationstation:
-      image: blackoutsecure/docker-emulationstation-de:latest
-      restart: unless-stopped
-      environment:
-        - TZ=Etc/UTC
-        - DISPLAY_NUM=0
-        - XDG_RUNTIME_DIR=/run/esde
-        - ESDE_VIDEO_DRIVER=kmsdrm
-        - UDEV=1
-        # - ESDE_ARGS=          # Optional: extra flags for es-de
-        # - APP_USER=abc        # Optional: container user (default: abc)
-        # - ESDE_HOME=/config   # Optional: ES-DE home directory
-      volumes:
-        - '/path/to/config:/config'
-        - '/path/to/roms:/roms'
-        - '/path/to/bios:/bios'
-      devices:
-        - '/dev/dri:/dev/dri'
-        - '/dev/input:/dev/input'
-        - '/dev/uinput:/dev/uinput'
-        - '/dev/bus/usb:/dev/bus/usb'
-        - '/dev/snd:/dev/snd'
-      privileged: true
-    ```
+    docker compose --profile default up -d     # Local display / kiosk
+    docker compose --profile selkies up -d     # Selkies WebRTC
 
-  Docker Hub image namespace: blackoutsecure
+  ## Local Display variant (profile: default)
+
+  Direct output to a connected monitor via KMSDRM or X11.
+
+    docker pull blackoutsecure/emulationstation-de:latest
+
+  ## Selkies WebRTC variant (profile: selkies)
+
+  Stream ES-DE to any web browser at https://<device-ip>:3001
+  (default credentials: abc / abc).
+
+    docker pull blackoutsecure/emulationstation-de:latest-selkies
+
+  Docker Hub: blackoutsecure/emulationstation-de
+
+  Tags:
+    - latest          — Local display variant
+    - latest-selkies  — Selkies WebRTC variant
 
   Repository: https://github.com/blackoutsecure/docker-emulationstation-de
-  Upstream application: https://gitlab.com/es-de/emulationstation-de
+  Upstream: https://gitlab.com/es-de/emulationstation-de
 
 version: 3.4.0
 type: sw.block

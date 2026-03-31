@@ -1,0 +1,22 @@
+{
+  "name": "docker-emulationstation-de",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [
+    3000,
+    3001
+  ],
+  "portsAttributes": {
+    "3000": {
+      "label": "Selkies HTTP",
+      "onAutoForward": "notify"
+    },
+    "3001": {
+      "label": "Selkies HTTPS",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "docker --version"
+}

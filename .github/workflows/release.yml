@@ -116,6 +116,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          target: default
           push: true
           pull: true
           no-cache: false
@@ -145,9 +146,69 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}
             ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-${{ github.sha }}
 
+  build-and-publish-selkies:
+    needs: resolve-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build args
+        id: buildargs
+        run: echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Selkies release tags
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: selkies
+          push: true
+          pull: true
+          no-cache: false
+          provenance: false
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
+            SELKIES_BASE_IMAGE_REGISTRY=${{ env.BASE_IMAGE_REGISTRY }}
+            BUILD_DATE=${{ steps.buildargs.outputs.build_date }}
+            VERSION=stable-${{ needs.resolve-release.outputs.release_tag }}
+            ESDE_VERSION=${{ needs.resolve-release.outputs.esde_build_ref }}
+            ESDE_CMAKE_BUILD_TYPE=Release
+            ESDE_STRIP_BINARIES=1
+            ESDE_APPLICATION_UPDATER=off
+            ESDE_DEINIT_ON_LAUNCH=off
+            ESDE_GLES=off
+            ESDE_VIDEO_HW_DECODING=off
+            VCS_URL=${{ env.REPO_URL }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.buildargs.outputs.build_date }}
+            org.opencontainers.image.version=${{ needs.resolve-release.outputs.release_tag }}-selkies
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ env.REPO_URL }}
+            org.opencontainers.image.url=${{ env.REPO_URL }}
+            build_version=Linuxserver.io version:- stable-${{ needs.resolve-release.outputs.release_tag }} Build-date:- ${{ steps.buildargs.outputs.build_date }} (Selkies)
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest-selkies
+            ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-selkies
+            ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-selkies-${{ github.sha }}
+
   create-github-release:
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    needs: [resolve-release, build-and-publish]
+    needs: [resolve-release, build-and-publish, build-and-publish-selkies]
     runs-on: ubuntu-latest
     steps:
       - name: Create release notes file
@@ -157,13 +218,20 @@ jobs:
 
           - Image: `${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}`
           - Tag: `${{ needs.resolve-release.outputs.release_tag }}`
+          - Selkies Tag: `${{ needs.resolve-release.outputs.release_tag }}-selkies`
           - ES-DE upstream ref: `${{ needs.resolve-release.outputs.esde_build_ref }}`
           - Built from: `${{ github.sha }}`
 
-          ### Pull
+          ### Pull (Local Display)
 
           ```bash
           docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}
+          ```
+
+          ### Pull (Selkies WebRTC)
+
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-selkies
           ```
           EOF
 

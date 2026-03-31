@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# esde-selkies-launch — Start ES-DE inside a Selkies WebRTC session.
+#
+# This script is called from /defaults/autostart by the Selkies Openbox
+# session.  It runs as the abc user.  Root-level setup (volume ownership,
+# symlinks) is handled by the init-esde-config s6 oneshot service which
+# runs before the desktop session starts.
+set -euo pipefail
+
+esde_home="${ESDE_HOME:-/config}"
+
+# Force SDL2 to use X11 — Selkies provides the display via Xvfb.
+# EGL is preferred over GLX for broader GPU compatibility.
+export SDL_VIDEODRIVER=x11
+export SDL_VIDEO_X11_FORCE_EGL="${SDL_VIDEO_X11_FORCE_EGL:-1}"
+
+# Disable screen blanking (the Selkies session should stay active)
+xset s off -dpms 2>/dev/null || true
+
+echo "[esde-selkies] Starting ES-DE (home=${esde_home}, DISPLAY=${DISPLAY:-:1})"
+exec /usr/local/bin/es-de --home "${esde_home}" ${ESDE_ARGS:-}
