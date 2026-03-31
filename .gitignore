@@ -31,6 +31,7 @@ out/
 target/
 coverage/
 .balena-source/
+.balena-deploy-*/
 
 # Dependencies
 node_modules/

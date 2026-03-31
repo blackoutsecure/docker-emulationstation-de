@@ -596,7 +596,10 @@ jobs:
         id: prep
         run: |
           set -euo pipefail
-          DEPLOY_DIR="$(mktemp -d)"
+          # Use a directory inside the workspace so the deploy action container can access it
+          DEPLOY_DIR="${GITHUB_WORKSPACE}/.balena-deploy-${{ matrix.variant }}"
+          rm -rf "${DEPLOY_DIR}"
+          mkdir -p "${DEPLOY_DIR}"
 
           # Generate a minimal Balena-compatible v2.4 compose for this variant
           pip install --quiet pyyaml 2>/dev/null || true
