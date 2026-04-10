@@ -171,27 +171,50 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
   echo "[hdmi-mirror]   DRM device: ${drm_device:-auto}"
   echo "[hdmi-mirror]   Connector ID: ${connector_id:-auto}"
 
-  kms_props=""
+  # Detect the kernel driver name for this DRM card (e.g. vc4 on RPi4)
+  drm_driver=""
   if [[ -n "${drm_device}" ]]; then
-    kms_props="driver-name= device=${drm_device}"
+    card_name="$(basename "${drm_device}")"
+    driver_link="/sys/class/drm/${card_name}/device/driver"
+    if [[ -L "${driver_link}" ]]; then
+      drm_driver="$(basename "$(readlink "${driver_link}")")"
+    fi
+  fi
+  echo "[hdmi-mirror]   DRM driver: ${drm_driver:-unknown}"
+
+  # Build kmssink properties.
+  # driver-name tells kmssink which kernel DRM driver to open.
+  # Do NOT set driver-name to empty — that causes drmOpen("",NULL) → ENOENT.
+  kms_props=""
+  if [[ -n "${drm_driver}" ]]; then
+    kms_props="driver-name=${drm_driver}"
   fi
   if [[ -n "${connector_id}" ]]; then
     kms_props="${kms_props} connector-id=${connector_id}"
   fi
 
-  exec gst-launch-1.0 -e \
+  echo "[hdmi-mirror] Launching: gst-launch-1.0 ... kmssink ${kms_props}"
+
+  # Don't exec — run in foreground so we can fall through to fbdev on failure.
+  if gst-launch-1.0 -e \
     ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
     "video/x-raw,framerate=${framerate}/1" ! \
     videoconvert ! \
     videoscale ! \
-    kmssink ${kms_props}
+    kmssink ${kms_props}; then
+    # Pipeline exited cleanly (e.g. EOS) — shouldn't normally happen, sleep.
+    echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
+    exec sleep infinity
+  fi
+
+  echo "[hdmi-mirror] GStreamer kmssink failed. Trying fallback methods..." >&2
 fi
 
 # ── Method 2: ffmpeg → Linux framebuffer (/dev/fb0) ─────────────────
 if command -v ffmpeg >/dev/null 2>&1 && [[ -e "${fb_device}" ]]; then
   width="${geometry%x*}"
   height="${geometry#*x}"
-  echo "[hdmi-mirror] Falling back to ffmpeg → ${fb_device}."
+  echo "[hdmi-mirror] Falling back to ffmpeg → ${fb_device} (${width}x${height})."
   exec ffmpeg -loglevel warning \
     -f x11grab -video_size "${width}x${height}" -framerate "${framerate}" \
     -i "${display}" \
