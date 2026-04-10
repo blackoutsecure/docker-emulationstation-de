@@ -87,8 +87,18 @@ services:
       SELKIES_UI_SIDEBAR_SHOW_FILES: 'false'
       SELKIES_UI_SIDEBAR_SHOW_APPS: 'false'
       SELKIES_UI_SIDEBAR_SHOW_CLIPBOARD: 'false'
-      SELKIES_FILE_TRANSFERS: 'none'
+      SELKIES_FILE_TRANSFERS: ''
       SELKIES_COMMAND_ENABLED: 'false'
+      # --- HDMI Mirror (optional — mirror to local display) ---
+      HDMI_MIRROR: 'true'              # 'true' to output to physical HDMI
+      # MIRROR_FRAMERATE: '30'         # Mirror FPS (default: 30)
+      # MIRROR_CONNECTOR_ID: ''        # DRM connector ID (auto-detect)
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+      - /dev/uinput:/dev/uinput
+      - /dev/snd:/dev/snd
+    privileged: true                   # Required for DRM master (HDMI output)
     ports:
       - '3000:3000'   # HTTP
       - '3001:3001'   # HTTPS (primary access)

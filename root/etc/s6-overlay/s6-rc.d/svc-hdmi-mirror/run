@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# s6 longrun: mirror virtual display to physical HDMI
+# Opt-in via HDMI_MIRROR=true in the container environment.
+set -euo pipefail
+
+if [[ "${HDMI_MIRROR:-false}" != "true" ]]; then
+  echo "[svc-hdmi-mirror] HDMI_MIRROR not enabled. Service idle."
+  exec sleep infinity
+fi
+
+exec /usr/local/bin/esde-hdmi-mirror

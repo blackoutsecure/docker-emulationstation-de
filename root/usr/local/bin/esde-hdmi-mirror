@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# esde-hdmi-mirror — Mirror the Selkies virtual X display to physical HDMI.
+#
+# Uses GStreamer ximagesrc → kmssink to capture the virtual display and
+# output directly to the DRM/KMS HDMI connector.  Falls back to
+# ffmpeg → fbdev when kmssink is unavailable.
+#
+# Environment:
+#   HDMI_MIRROR          Set to 'true' to enable (required)
+#   MIRROR_DISPLAY       X display to capture (default: $DISPLAY or :0)
+#   MIRROR_FRAMERATE     Target framerate  (default: 30)
+#   MIRROR_CONNECTOR_ID  DRM connector ID for kmssink (auto-detect if unset)
+#   MIRROR_FB_DEVICE     Framebuffer device for ffmpeg fallback (/dev/fb0)
+set -euo pipefail
+
+display="${MIRROR_DISPLAY:-${DISPLAY:-:0}}"
+framerate="${MIRROR_FRAMERATE:-30}"
+connector_id="${MIRROR_CONNECTOR_ID:-}"
+fb_device="${MIRROR_FB_DEVICE:-/dev/fb0}"
+
+# ── Wait for the virtual X display to become reachable ──────────────
+echo "[hdmi-mirror] Waiting for X display ${display}..."
+attempts=0
+while ! DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; do
+  attempts=$((attempts + 1))
+  if (( attempts > 60 )); then
+    echo "[hdmi-mirror] Error: display ${display} not ready after 60 s." >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+geometry="$(DISPLAY="${display}" xdpyinfo | awk '/dimensions:/{print $2}')"
+echo "[hdmi-mirror] Display ${display} ready (${geometry}). Mirroring at ${framerate} fps."
+
+# ── Method 1: GStreamer ximagesrc → kmssink (DRM/KMS) ───────────────
+if command -v gst-launch-1.0 >/dev/null 2>&1 \
+   && gst-inspect-1.0 kmssink  >/dev/null 2>&1 \
+   && gst-inspect-1.0 ximagesrc >/dev/null 2>&1; then
+
+  echo "[hdmi-mirror] Using GStreamer ximagesrc → kmssink."
+
+  connector_prop=""
+  if [[ -n "${connector_id}" ]]; then
+    connector_prop="connector-id=${connector_id}"
+  fi
+
+  exec gst-launch-1.0 -e \
+    ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
+    "video/x-raw,framerate=${framerate}/1" ! \
+    videoconvert ! \
+    kmssink ${connector_prop}
+fi
+
+# ── Method 2: ffmpeg → Linux framebuffer (/dev/fb0) ─────────────────
+if command -v ffmpeg >/dev/null 2>&1 && [[ -e "${fb_device}" ]]; then
+  width="${geometry%x*}"
+  height="${geometry#*x}"
+  echo "[hdmi-mirror] Falling back to ffmpeg → ${fb_device}."
+  exec ffmpeg -loglevel warning \
+    -f x11grab -video_size "${width}x${height}" -framerate "${framerate}" \
+    -i "${display}" \
+    -vf "format=bgra" -f fbdev "${fb_device}"
+fi
+
+echo "[hdmi-mirror] Error: no output method available." >&2
+echo "[hdmi-mirror]   Install gstreamer1.0-plugins-bad (kmssink)" >&2
+echo "[hdmi-mirror]   or pass /dev/fb0 for the ffmpeg fallback." >&2
+exit 1

@@ -268,7 +268,10 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       libdrm2 \
       libxkbcommon0 \
       libpoppler-cpp0t64 \
-      libgles2 && \
+      libgles2 \
+      # HDMI mirror support (ximagesrc → kmssink)
+      gstreamer1.0-plugins-bad \
+      x11-utils && \
     echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \
@@ -292,6 +295,10 @@ COPY /root/usr/local/bin/esde-selkies-launch /usr/local/bin/esde-selkies-launch
 # Selkies s6-overlay init service for root-level setup before app launch
 COPY /root/etc/s6-overlay/s6-rc.d/init-esde-config /etc/s6-overlay/s6-rc.d/init-esde-config
 
+# Optional HDMI mirror service (set HDMI_MIRROR=true to enable)
+COPY /root/usr/local/bin/esde-hdmi-mirror /usr/local/bin/esde-hdmi-mirror
+COPY /root/etc/s6-overlay/s6-rc.d/svc-hdmi-mirror /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror
+
 RUN set -eux; \
   echo "**** record build version ****"; \
   if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi; \
@@ -301,14 +308,21 @@ RUN set -eux; \
   chown abc:abc /roms /bios; \
   echo "**** set permissions ****"; \
   chmod 755 /usr/local/bin/esde-selkies-launch; \
+  chmod 755 /usr/local/bin/esde-hdmi-mirror; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/type; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/up; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config/run; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/dependencies.d/*; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/run; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/type; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/dependencies.d; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/dependencies.d/*; \
   echo "**** register init service with s6 ****"; \
   mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d; \
-  touch /etc/s6-overlay/s6-rc.d/user/contents.d/init-esde-config
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/init-esde-config; \
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-hdmi-mirror
 
 EXPOSE 3000 3001
 
