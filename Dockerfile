@@ -269,8 +269,11 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       libxkbcommon0 \
       libpoppler-cpp0t64 \
       libgles2 \
-      # HDMI mirror support (ximagesrc → kmssink)
+      gstreamer1.0-tools \
+      gstreamer1.0-plugins-base \
+      gstreamer1.0-plugins-good \
       gstreamer1.0-plugins-bad \
+      ffmpeg \
       x11-utils && \
     echo "**** cleanup ****" && \
     apt-get clean && \

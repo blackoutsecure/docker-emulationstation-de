@@ -1,22 +1,140 @@
 #!/usr/bin/env bash
 # esde-hdmi-mirror — Mirror the Selkies virtual X display to physical HDMI.
 #
-# Uses GStreamer ximagesrc → kmssink to capture the virtual display and
-# output directly to the DRM/KMS HDMI connector.  Falls back to
-# ffmpeg → fbdev when kmssink is unavailable.
+# Captures the Xvfb virtual display and outputs to a physical HDMI display.
+# Tries multiple output methods in order:
+#   1. GStreamer ximagesrc → kmssink  (DRM/KMS — best quality, RPi4 native)
+#   2. ffmpeg x11grab → fbdev        (Linux framebuffer fallback)
 #
 # Environment:
 #   HDMI_MIRROR          Set to 'true' to enable (required)
 #   MIRROR_DISPLAY       X display to capture (default: $DISPLAY or :0)
 #   MIRROR_FRAMERATE     Target framerate  (default: 30)
+#   MIRROR_DRM_DEVICE    DRM card device for kmssink (auto-detect if unset)
 #   MIRROR_CONNECTOR_ID  DRM connector ID for kmssink (auto-detect if unset)
 #   MIRROR_FB_DEVICE     Framebuffer device for ffmpeg fallback (/dev/fb0)
 set -euo pipefail
 
 display="${MIRROR_DISPLAY:-${DISPLAY:-:0}}"
 framerate="${MIRROR_FRAMERATE:-30}"
+drm_device="${MIRROR_DRM_DEVICE:-}"
 connector_id="${MIRROR_CONNECTOR_ID:-}"
 fb_device="${MIRROR_FB_DEVICE:-/dev/fb0}"
+
+# ── Diagnostics ─────────────────────────────────────────────────────
+echo "[hdmi-mirror] ===== HDMI Mirror Diagnostics ====="
+echo "[hdmi-mirror] Architecture: $(uname -m)"
+echo "[hdmi-mirror] Kernel: $(uname -r)"
+echo "[hdmi-mirror] Tools:"
+echo "[hdmi-mirror]   gst-launch-1.0: $(command -v gst-launch-1.0 2>/dev/null || echo 'NOT FOUND')"
+echo "[hdmi-mirror]   gst-inspect-1.0: $(command -v gst-inspect-1.0 2>/dev/null || echo 'NOT FOUND')"
+echo "[hdmi-mirror]   ffmpeg: $(command -v ffmpeg 2>/dev/null || echo 'NOT FOUND')"
+echo "[hdmi-mirror]   xdpyinfo: $(command -v xdpyinfo 2>/dev/null || echo 'NOT FOUND')"
+
+if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+  echo "[hdmi-mirror] GStreamer plugins:"
+  echo "[hdmi-mirror]   kmssink: $(gst-inspect-1.0 kmssink >/dev/null 2>&1 && echo 'YES' || echo 'NO')"
+  echo "[hdmi-mirror]   ximagesrc: $(gst-inspect-1.0 ximagesrc >/dev/null 2>&1 && echo 'YES' || echo 'NO')"
+  echo "[hdmi-mirror]   videoconvert: $(gst-inspect-1.0 videoconvert >/dev/null 2>&1 && echo 'YES' || echo 'NO')"
+  echo "[hdmi-mirror]   videoscale: $(gst-inspect-1.0 videoscale >/dev/null 2>&1 && echo 'YES' || echo 'NO')"
+else
+  echo "[hdmi-mirror] GStreamer: NOT INSTALLED"
+fi
+
+echo "[hdmi-mirror] DRI devices:"
+if [[ -d /dev/dri ]]; then
+  ls -la /dev/dri/ 2>/dev/null | while IFS= read -r line; do
+    echo "[hdmi-mirror]   ${line}"
+  done
+else
+  echo "[hdmi-mirror]   /dev/dri NOT FOUND"
+fi
+
+echo "[hdmi-mirror] Framebuffers: $(ls /dev/fb* 2>/dev/null || echo 'NONE')"
+
+# Enumerate DRM connectors for each card
+for card in /dev/dri/card*; do
+  [[ -e "${card}" ]] || continue
+  card_name="$(basename "${card}")"
+  echo "[hdmi-mirror] DRM connectors on ${card_name}:"
+  card_sys="/sys/class/drm"
+  for connector_dir in "${card_sys}/${card_name}"-*; do
+    [[ -d "${connector_dir}" ]] || continue
+    conn_name="$(basename "${connector_dir}")"
+    conn_status="$(cat "${connector_dir}/status" 2>/dev/null || echo 'unknown')"
+    conn_enabled="$(cat "${connector_dir}/enabled" 2>/dev/null || echo 'unknown')"
+    echo "[hdmi-mirror]   ${conn_name}: status=${conn_status}, enabled=${conn_enabled}"
+  done
+done
+
+echo "[hdmi-mirror] ===== End Diagnostics ====="
+
+# ── Auto-detect DRM device for RPi4 / vc4 ──────────────────────────
+# On Raspberry Pi 4, there are typically two DRM cards:
+#   card0 = vc4 (display controller w/ HDMI connectors)
+#   card1 = v3d (3D rendering only, no connectors)
+# We need the card that has HDMI connectors.
+auto_detect_drm_device() {
+  for card in /dev/dri/card*; do
+    [[ -e "${card}" ]] || continue
+    card_name="$(basename "${card}")"
+    # Check if this card has any HDMI connector
+    for connector_dir in /sys/class/drm/"${card_name}"-HDMI-*; do
+      if [[ -d "${connector_dir}" ]]; then
+        echo "${card}"
+        return 0
+      fi
+    done
+  done
+  # Fallback: return first card
+  local first_card
+  first_card="$(ls /dev/dri/card* 2>/dev/null | head -1)"
+  if [[ -n "${first_card}" ]]; then
+    echo "${first_card}"
+    return 0
+  fi
+  return 1
+}
+
+# Auto-detect connector ID for a given DRM card
+# Returns the connector ID of the first connected HDMI port
+auto_detect_connector() {
+  local card_dev="$1"
+  local card_name
+  card_name="$(basename "${card_dev}")"
+
+  # First try: find a connected HDMI connector
+  for connector_dir in /sys/class/drm/"${card_name}"-HDMI-*; do
+    [[ -d "${connector_dir}" ]] || continue
+    local status
+    status="$(cat "${connector_dir}/status" 2>/dev/null)" || continue
+    if [[ "${status}" == "connected" ]]; then
+      # Extract connector ID from the uevent file or connector_id file
+      local cid
+      if [[ -r "${connector_dir}/connector_id" ]]; then
+        cid="$(cat "${connector_dir}/connector_id" 2>/dev/null)"
+      fi
+      if [[ -n "${cid:-}" ]]; then
+        echo "${cid}"
+        return 0
+      fi
+    fi
+  done
+
+  # Second try: any HDMI connector regardless of status
+  for connector_dir in /sys/class/drm/"${card_name}"-HDMI-*; do
+    [[ -d "${connector_dir}" ]] || continue
+    local cid
+    if [[ -r "${connector_dir}/connector_id" ]]; then
+      cid="$(cat "${connector_dir}/connector_id" 2>/dev/null)"
+    fi
+    if [[ -n "${cid:-}" ]]; then
+      echo "${cid}"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # ── Wait for the virtual X display to become reachable ──────────────
 echo "[hdmi-mirror] Waiting for X display ${display}..."
@@ -25,7 +143,8 @@ while ! DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; do
   attempts=$((attempts + 1))
   if (( attempts > 60 )); then
     echo "[hdmi-mirror] Error: display ${display} not ready after 60 s." >&2
-    exit 1
+    echo "[hdmi-mirror] Sleeping to avoid restart loop." >&2
+    exec sleep infinity
   fi
   sleep 1
 done
@@ -38,18 +157,34 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
    && gst-inspect-1.0 kmssink  >/dev/null 2>&1 \
    && gst-inspect-1.0 ximagesrc >/dev/null 2>&1; then
 
-  echo "[hdmi-mirror] Using GStreamer ximagesrc → kmssink."
+  # Auto-detect DRM device if not specified
+  if [[ -z "${drm_device}" ]]; then
+    drm_device="$(auto_detect_drm_device)" || true
+  fi
 
-  connector_prop=""
+  # Auto-detect connector if not specified
+  if [[ -z "${connector_id}" && -n "${drm_device}" ]]; then
+    connector_id="$(auto_detect_connector "${drm_device}")" || true
+  fi
+
+  echo "[hdmi-mirror] Using GStreamer ximagesrc → kmssink."
+  echo "[hdmi-mirror]   DRM device: ${drm_device:-auto}"
+  echo "[hdmi-mirror]   Connector ID: ${connector_id:-auto}"
+
+  kms_props=""
+  if [[ -n "${drm_device}" ]]; then
+    kms_props="driver-name= device=${drm_device}"
+  fi
   if [[ -n "${connector_id}" ]]; then
-    connector_prop="connector-id=${connector_id}"
+    kms_props="${kms_props} connector-id=${connector_id}"
   fi
 
   exec gst-launch-1.0 -e \
     ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
     "video/x-raw,framerate=${framerate}/1" ! \
     videoconvert ! \
-    kmssink ${connector_prop}
+    videoscale ! \
+    kmssink ${kms_props}
 fi
 
 # ── Method 2: ffmpeg → Linux framebuffer (/dev/fb0) ─────────────────
@@ -63,7 +198,22 @@ if command -v ffmpeg >/dev/null 2>&1 && [[ -e "${fb_device}" ]]; then
     -vf "format=bgra" -f fbdev "${fb_device}"
 fi
 
-echo "[hdmi-mirror] Error: no output method available." >&2
-echo "[hdmi-mirror]   Install gstreamer1.0-plugins-bad (kmssink)" >&2
-echo "[hdmi-mirror]   or pass /dev/fb0 for the ffmpeg fallback." >&2
-exit 1
+echo "============================================================" >&2
+echo "[hdmi-mirror] ERROR: no output method available." >&2
+echo "" >&2
+echo "  Checked for:" >&2
+echo "    1. gst-launch-1.0 + kmssink + ximagesrc" >&2
+echo "       gst-launch-1.0: $(command -v gst-launch-1.0 2>/dev/null || echo 'MISSING')" >&2
+if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+  echo "       kmssink: $(gst-inspect-1.0 kmssink >/dev/null 2>&1 && echo 'OK' || echo 'MISSING')" >&2
+  echo "       ximagesrc: $(gst-inspect-1.0 ximagesrc >/dev/null 2>&1 && echo 'OK' || echo 'MISSING')" >&2
+fi
+echo "    2. ffmpeg + ${fb_device}" >&2
+echo "       ffmpeg: $(command -v ffmpeg 2>/dev/null || echo 'MISSING')" >&2
+echo "       ${fb_device}: $([[ -e "${fb_device}" ]] && echo 'EXISTS' || echo 'MISSING')" >&2
+echo "" >&2
+echo "  To fix: rebuild the image with --no-cache" >&2
+echo "    docker compose --profile selkies build --no-cache" >&2
+echo "============================================================" >&2
+echo "[hdmi-mirror] Sleeping to avoid restart loop." >&2
+exec sleep infinity
