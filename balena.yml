@@ -35,7 +35,7 @@ post-provisioning: >-
   Repository: https://github.com/blackoutsecure/docker-emulationstation-de
   Upstream: https://gitlab.com/es-de/emulationstation-de
 
-version: 3.4.0
+version: 3.4.1
 type: sw.block
 assets:
   repository:
