@@ -149,6 +149,21 @@ while ! DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; do
   sleep 1
 done
 
+# ── Wait for Selkies to resize the display to a sane resolution ─────
+# Xvfb can initially report a huge resolution (e.g. 15360x8640) before
+# Selkies sets its actual resolution. Wait for something ≤ 4K.
+echo "[hdmi-mirror] Waiting for Selkies to set display resolution..."
+for _ in $(seq 1 30); do
+  geometry="$(DISPLAY="${display}" xdpyinfo | awk '/dimensions:/{print $2}')"
+  res_w="${geometry%x*}"
+  res_h="${geometry#*x}"
+  if (( res_w <= 3840 && res_h <= 2160 )); then
+    break
+  fi
+  echo "[hdmi-mirror]   Current: ${geometry} (waiting for ≤3840x2160)..."
+  sleep 2
+done
+
 geometry="$(DISPLAY="${display}" xdpyinfo | awk '/dimensions:/{print $2}')"
 echo "[hdmi-mirror] Display ${display} ready (${geometry}). Mirroring at ${framerate} fps."
 
@@ -171,54 +186,80 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
   echo "[hdmi-mirror]   DRM device: ${drm_device:-auto}"
   echo "[hdmi-mirror]   Connector ID: ${connector_id:-auto}"
 
-  # Detect the kernel driver name for this DRM card (e.g. vc4 on RPi4)
-  drm_driver=""
-  if [[ -n "${drm_device}" ]]; then
-    card_name="$(basename "${drm_device}")"
-    driver_link="/sys/class/drm/${card_name}/device/driver"
-    if [[ -L "${driver_link}" ]]; then
-      drm_driver="$(basename "$(readlink "${driver_link}")")"
-    fi
-  fi
-  echo "[hdmi-mirror]   DRM driver: ${drm_driver:-unknown}"
-
-  # Build kmssink properties.
-  # driver-name tells kmssink which kernel DRM driver to open.
-  # Do NOT set driver-name to empty — that causes drmOpen("",NULL) → ENOENT.
+  # Build kmssink property string.
+  # Only include connector-id; let kmssink auto-detect the driver/device.
+  # Setting driver-name to the sysfs name (e.g. "vc4-drm") does NOT work
+  # because drmOpen() expects the DRM version name (e.g. "vc4").
   kms_props=""
-  if [[ -n "${drm_driver}" ]]; then
-    kms_props="driver-name=${drm_driver}"
-  fi
   if [[ -n "${connector_id}" ]]; then
-    kms_props="${kms_props} connector-id=${connector_id}"
+    kms_props="connector-id=${connector_id}"
   fi
 
-  echo "[hdmi-mirror] Launching: gst-launch-1.0 ... kmssink ${kms_props}"
-
-  # Don't exec — run in foreground so we can fall through to fbdev on failure.
+  # Attempt 1: auto-detect (no driver-name)
+  echo "[hdmi-mirror] Attempt 1: kmssink ${kms_props}"
   if gst-launch-1.0 -e \
     ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
     "video/x-raw,framerate=${framerate}/1" ! \
     videoconvert ! \
     videoscale ! \
-    kmssink ${kms_props}; then
-    # Pipeline exited cleanly (e.g. EOS) — shouldn't normally happen, sleep.
+    kmssink ${kms_props} 2>&1; then
     echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
     exec sleep infinity
   fi
+  echo "[hdmi-mirror] Attempt 1 failed." >&2
 
-  echo "[hdmi-mirror] GStreamer kmssink failed. Trying fallback methods..." >&2
+  # Attempt 2: try common RPi driver names
+  for try_driver in vc4 vc4-drm; do
+    echo "[hdmi-mirror] Attempt: kmssink driver-name=${try_driver} ${kms_props}"
+    if gst-launch-1.0 -e \
+      ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
+      "video/x-raw,framerate=${framerate}/1" ! \
+      videoconvert ! \
+      videoscale ! \
+      kmssink driver-name="${try_driver}" ${kms_props} 2>&1; then
+      echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
+      exec sleep infinity
+    fi
+    echo "[hdmi-mirror] driver-name=${try_driver} failed." >&2
+  done
+
+  echo "[hdmi-mirror] All GStreamer kmssink attempts failed. Trying fallback..." >&2
 fi
 
 # ── Method 2: ffmpeg → Linux framebuffer (/dev/fb0) ─────────────────
 if command -v ffmpeg >/dev/null 2>&1 && [[ -e "${fb_device}" ]]; then
   width="${geometry%x*}"
   height="${geometry#*x}"
-  echo "[hdmi-mirror] Falling back to ffmpeg → ${fb_device} (${width}x${height})."
+
+  # Detect the framebuffer's native pixel format and resolution
+  fb_name="$(basename "${fb_device}")"
+  fb_bits="$(cat /sys/class/graphics/"${fb_name}"/bits_per_pixel 2>/dev/null)" || fb_bits=""
+  fb_res="$(cat /sys/class/graphics/"${fb_name}"/virtual_size 2>/dev/null)" || fb_res=""
+  echo "[hdmi-mirror] Framebuffer: ${fb_device}, bits_per_pixel=${fb_bits:-?}, virtual_size=${fb_res:-?}"
+
+  # Pick the correct pixel format for the framebuffer
+  pix_fmt="rgb565le"   # RPi4 default (16-bit)
+  if [[ "${fb_bits}" == "32" ]]; then
+    pix_fmt="bgra"
+  elif [[ "${fb_bits}" == "24" ]]; then
+    pix_fmt="bgr24"
+  fi
+
+  # Scale to match framebuffer resolution if available
+  scale_filter=""
+  if [[ -n "${fb_res}" ]]; then
+    fb_w="${fb_res%%,*}"
+    fb_h="${fb_res##*,}"
+    if [[ -n "${fb_w}" && -n "${fb_h}" && "${fb_w}" -gt 0 && "${fb_h}" -gt 0 ]]; then
+      scale_filter="scale=${fb_w}:${fb_h},"
+    fi
+  fi
+
+  echo "[hdmi-mirror] Falling back to ffmpeg → ${fb_device} (source=${width}x${height}, pix_fmt=${pix_fmt})."
   exec ffmpeg -loglevel warning \
     -f x11grab -video_size "${width}x${height}" -framerate "${framerate}" \
     -i "${display}" \
-    -vf "format=bgra" -f fbdev "${fb_device}"
+    -vf "${scale_filter}format=${pix_fmt}" -f fbdev "${fb_device}"
 fi
 
 echo "============================================================" >&2
