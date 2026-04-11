@@ -33,6 +33,14 @@ if ! ${pa_ok}; then
 fi
 echo "${TAG} PulseAudio is running."
 
+# ── Load USB audio module if needed ───────────────────────────────
+if [[ -d /dev/bus/usb ]]; then
+  modprobe snd-usb-audio 2>/dev/null || true
+  # Retrigger udev for USB sound devices so PulseAudio can discover them
+  udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
+  udevadm settle --timeout=5 2>/dev/null || true
+fi
+
 # ── Wait for hardware ALSA sink ───────────────────────────────────
 # USB devices can take time to be discovered by module-udev-detect.
 echo "${TAG} Waiting for hardware audio device..."
@@ -46,8 +54,12 @@ for i in $(seq 1 30); do
       break
     fi
   else
-    # Auto-detect first ALSA hardware sink
-    local_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+    # Auto-detect: prefer USB ALSA sink over HDMI
+    local_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
+    if [[ -z "${local_sink}" ]]; then
+      # Fall back to any ALSA hardware sink
+      local_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+    fi
     if [[ -n "${local_sink}" ]]; then
       break
     fi

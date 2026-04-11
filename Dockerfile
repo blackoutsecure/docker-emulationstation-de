@@ -2,13 +2,15 @@
 #
 # Unified Dockerfile for EmulationStation-DE
 #
-# Two build targets:
-#   default  — Local display / kiosk (KMSDRM, X11, hardware passthrough)
-#   selkies  — Selkies WebRTC remote access (stream to web browser)
+# Build targets:
+#   default             — Local display / kiosk (KMSDRM, X11, hardware passthrough)
+#   selkies             — Selkies WebRTC remote access (stream to web browser)
+#   emulator-provider   — Sidecar: provisions emulator binaries + cores onto a shared volume
 #
 # Build examples:
 #   docker build --target default -t esde:latest .
 #   docker build --target selkies -t esde:latest-selkies .
+#   docker build --target emulator-provider -t esde-emulator-provider:latest .
 
 ARG BASE_IMAGE_REGISTRY=ghcr.io
 ARG BASE_IMAGE_NAME=linuxserver/baseimage-ubuntu
@@ -20,6 +22,12 @@ ARG SELKIES_BASE_IMAGE_REGISTRY=ghcr.io
 ARG SELKIES_BASE_IMAGE_NAME=linuxserver/baseimage-selkies
 ARG SELKIES_BASE_IMAGE_VARIANT=ubuntunoble
 ARG SELKIES_BASE_IMAGE=${SELKIES_BASE_IMAGE_REGISTRY}/${SELKIES_BASE_IMAGE_NAME}:${SELKIES_BASE_IMAGE_VARIANT}
+
+# RetroArch image used by the emulator-provider sidecar.
+# This is the official linuxserver.io community image — we pull it as-is
+# and only add libretro cores on top.  No RetroArch compilation needed.
+#   https://docs.linuxserver.io/images/docker-retroarch/
+ARG RETROARCH_IMAGE=lscr.io/linuxserver/retroarch:latest
 
 ARG BUILD_OUTPUT_DIR=/out
 ARG ESDE_REPO=https://gitlab.com/es-de/emulationstation-de.git
@@ -189,10 +197,51 @@ RUN echo "**** install runtime dependencies ****" && \
       /var/lib/apt/lists/* \
       /var/tmp/*
 
+# --- Optional: RetroArch + libretro cores (baked into image) ---
+# ES-DE is a frontend only — it launches emulators as child processes.
+# RetroArch MUST be in the same container filesystem (not a separate container)
+# because ES-DE fork+exec's it with the same display, audio, and GPU context.
+#
+# RECOMMENDED: Use the emulator sidecar instead (--profile sidecar).
+# The sidecar pulls directly from linuxserver/docker-retroarch — no build needed.
+#   https://docs.linuxserver.io/images/docker-retroarch/
+#
+# Set INSTALL_RETROARCH=true at build time to bake RetroArch into this image.
+# This installs from Ubuntu repos (may differ from the linuxserver PPA version).
+# Default: false (keeps image lean; use the sidecar or apt-install at runtime).
+ARG INSTALL_RETROARCH=false
+RUN set -eux; \
+    if [ "${INSTALL_RETROARCH}" = "true" ]; then \
+      echo "**** install RetroArch + libretro cores ****"; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends retroarch; \
+      for core in \
+        libretro-gambatte \
+        libretro-mgba \
+        libretro-snes9x \
+        libretro-nestopia \
+        libretro-genesis-plus-gx \
+        libretro-beetle-pce-fast \
+      ; do \
+        apt-get install -y --no-install-recommends "$core" 2>/dev/null || \
+          echo "Note: $core not available for this architecture, skipping."; \
+      done; \
+      mkdir -p /usr/lib/libretro; \
+      for dir in /usr/lib/*/libretro; do \
+        [ -d "$dir" ] || continue; \
+        for f in "$dir"/*.so; do \
+          [ -f "$f" ] && ln -sf "$f" /usr/lib/libretro/; \
+        done; \
+      done; \
+      apt-get clean; \
+      rm -rf /var/lib/apt/lists/* /tmp/*; \
+    fi
+
 COPY --from=builder /out/usr/local/ /usr/local/
 COPY --from=builder /out/defaults/roms/ /defaults/roms/
 
 COPY /root/usr/local/bin/esde-startx-session /usr/local/bin/esde-startx-session
+COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
 COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
 COPY /root/defaults/roms/LICENSE-bundled-roms.txt /defaults/roms/LICENSE-bundled-roms.txt
 
@@ -205,7 +254,7 @@ RUN set -eux; \
   chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d; \
   chmod 755 /etc/s6-overlay/s6-rc.d/user/contents.d; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde/type /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d/init-services /etc/s6-overlay/s6-rc.d/user/contents.d/svc-esde; \
-  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde/run /usr/local/bin/esde-startx-session
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde/run /usr/local/bin/esde-startx-session /usr/local/bin/esde-emuwrap
 
 VOLUME /config
 
@@ -288,6 +337,37 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       /var/lib/apt/lists/* \
       /var/tmp/*
 
+# --- Optional: RetroArch + libretro cores (baked into image) ---
+# Same rationale as the default target — ES-DE needs retroarch in-process.
+# RECOMMENDED: Use the emulator sidecar instead (--profile sidecar).
+ARG INSTALL_RETROARCH=false
+RUN set -eux; \
+    if [ "${INSTALL_RETROARCH}" = "true" ]; then \
+      echo "**** install RetroArch + libretro cores ****"; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends retroarch; \
+      for core in \
+        libretro-gambatte \
+        libretro-mgba \
+        libretro-snes9x \
+        libretro-nestopia \
+        libretro-genesis-plus-gx \
+        libretro-beetle-pce-fast \
+      ; do \
+        apt-get install -y --no-install-recommends "$core" 2>/dev/null || \
+          echo "Note: $core not available for this architecture, skipping."; \
+      done; \
+      mkdir -p /usr/lib/libretro; \
+      for dir in /usr/lib/*/libretro; do \
+        [ -d "$dir" ] || continue; \
+        for f in "$dir"/*.so; do \
+          [ -f "$f" ] && ln -sf "$f" /usr/lib/libretro/; \
+        done; \
+      done; \
+      apt-get clean; \
+      rm -rf /var/lib/apt/lists/* /tmp/*; \
+    fi
+
 # Copy ES-DE binary and resources from builder
 COPY --from=builder /out/usr/local/ /usr/local/
 COPY --from=builder /out/defaults/roms/ /defaults/roms/
@@ -316,6 +396,9 @@ COPY /root/etc/s6-overlay/s6-rc.d/svc-local-input /etc/s6-overlay/s6-rc.d/svc-lo
 COPY /root/usr/local/bin/esde-audio /usr/local/bin/esde-audio
 COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-audio /etc/s6-overlay/s6-rc.d/svc-esde-audio
 
+# Generic emulator wrapper (calls emulators from /opt/emulators/<name>/ with correct LD_LIBRARY_PATH)
+COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
+
 # ES-DE and emulator log tailer (always active)
 COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-logs /etc/s6-overlay/s6-rc.d/svc-esde-logs
 
@@ -331,6 +414,7 @@ RUN set -eux; \
   chmod 755 /usr/local/bin/esde-hdmi-mirror; \
   chmod 755 /usr/local/bin/esde-local-input; \
   chmod 755 /usr/local/bin/esde-audio; \
+  chmod 755 /usr/local/bin/esde-emuwrap; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/type; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/up; \
@@ -367,3 +451,57 @@ RUN set -eux; \
 EXPOSE 3000 3001
 
 VOLUME /config
+
+# ============================================================================
+# Stage 3 — Emulator Provider Sidecar
+#   docker build --target emulator-provider .
+#
+# Uses the linuxserver.io community RetroArch image directly — no compilation.
+#   https://docs.linuxserver.io/images/docker-retroarch/
+#
+# RetroArch is already installed in that image (via ppa:libretro/stable).
+# We only add libretro cores on top, then run esde-provision to copy
+# the binary, cores, and required shared libraries to a shared volume.
+#
+# The ES-DE container mounts the volume at /opt/emulators and calls
+# emulators via esde-emuwrap (resolves emulator from symlink name,
+# sets LD_LIBRARY_PATH, exec's the real binary).
+#
+# Independent update cycles:
+#   - Update RetroArch: docker pull the new linuxserver image, rebuild sidecar
+#   - Update ES-DE:     rebuild the ES-DE image (emulators untouched)
+#
+# Override RETROARCH_IMAGE at the top of this file to pin a version:
+#   ARG RETROARCH_IMAGE=lscr.io/linuxserver/retroarch:1.22.2
+# ============================================================================
+FROM ${RETROARCH_IMAGE} AS emulator-provider
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+LABEL org.opencontainers.image.title="esde-emulator-provider" \
+  org.opencontainers.image.description="Sidecar that provisions RetroArch + libretro cores for ES-DE. Based on linuxserver/docker-retroarch."
+
+# RetroArch is already installed from the linuxserver image.
+# The linuxserver image ships NO libretro cores — only the frontend binary,
+# assets, and core-info metadata.  Install commonly-used cores from the
+# Ubuntu/PPA repos (the PPA source list is already configured in the image).
+RUN echo "**** install libretro cores ****" && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libretro-gambatte \
+      libretro-mgba \
+      libretro-snes9x \
+      libretro-nestopia \
+      libretro-genesis-plus-gx \
+      libretro-beetle-pce-fast \
+      2>/dev/null; \
+    echo "**** cleanup ****" && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/*
+
+COPY /root/usr/local/bin/esde-provision /usr/local/bin/esde-provision
+RUN chmod 755 /usr/local/bin/esde-provision
+
+VOLUME /export
+
+ENTRYPOINT ["/usr/local/bin/esde-provision"]

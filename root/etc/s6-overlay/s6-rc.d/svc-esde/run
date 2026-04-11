@@ -58,8 +58,38 @@ if [[ -e /dev/snd/controlC0 ]]; then
   fi
 fi
 
+# Match host device GIDs for /dev/input (gamepads, keyboards, mice)
+if [[ -d /dev/input ]]; then
+  for _input_dev in /dev/input/event*; do
+    [[ -e "${_input_dev}" ]] || continue
+    input_gid="$(stat -c '%g' "${_input_dev}" 2>/dev/null)" || true
+    if [[ -n "${input_gid}" && "${input_gid}" != "0" ]]; then
+      if ! id -G "${app_user}" 2>/dev/null | grep -qw "${input_gid}"; then
+        input_grp="$(getent group "${input_gid}" 2>/dev/null | cut -d: -f1)" || true
+        if [[ -z "${input_grp}" ]]; then
+          groupadd -g "${input_gid}" hostinput 2>/dev/null || true
+          input_grp="hostinput"
+        fi
+        usermod -aG "${input_grp}" "${app_user}" 2>/dev/null || true
+        echo "[svc-esde] Added ${app_user} to group ${input_grp} (GID ${input_gid}) for /dev/input access."
+      fi
+    fi
+    break  # Only need to check one device for the GID
+  done
+fi
+
 # --- Audio detection and setup ---
 # ES-DE requires PulseAudio or PipeWire; raw ALSA is not supported.
+
+# Load the USB audio kernel module if available. Without it, USB sound cards
+# will not appear in /proc/asound/cards even when /dev/bus/usb is passed through.
+if [[ -d /dev/bus/usb ]]; then
+  if modprobe snd-usb-audio 2>/dev/null; then
+    echo "[svc-esde] Loaded snd-usb-audio kernel module."
+  else
+    echo "[svc-esde] Note: Could not load snd-usb-audio module (may already be loaded, or host kernel lacks it)." >&2
+  fi
+fi
 
 # Start udevd early so PulseAudio's module-udev-detect can discover ALSA cards,
 # and Xorg can later discover input devices.
@@ -69,10 +99,17 @@ if ! pidof systemd-udevd >/dev/null 2>&1 && ! pidof udevd >/dev/null 2>&1; then
     /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
     udevadm trigger --action=add 2>/dev/null || true
     udevadm settle --timeout=5 2>/dev/null || true
+    # Retrigger USB sound and input subsystems — USB devices may need extra time
+    udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
+    udevadm trigger --action=add --subsystem-match=input 2>/dev/null || true
+    udevadm settle --timeout=5 2>/dev/null || true
   elif command -v udevd >/dev/null 2>&1; then
     echo "[svc-esde] Starting udevd for device discovery."
     udevd --daemon 2>/dev/null || true
     udevadm trigger --action=add 2>/dev/null || true
+    udevadm settle --timeout=5 2>/dev/null || true
+    udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
+    udevadm trigger --action=add --subsystem-match=input 2>/dev/null || true
     udevadm settle --timeout=5 2>/dev/null || true
   else
     echo "[svc-esde] Warning: udevd not found. Audio detection and input hotplug may not work." >&2
@@ -95,6 +132,18 @@ if [[ -d /dev/snd ]]; then
 else
   echo "[svc-esde] Warning: /dev/snd not found. No sound devices available." >&2
   echo "[svc-esde]   For USB audio: pass --device /dev/snd:/dev/snd or use privileged mode." >&2
+  echo "[svc-esde]   Ensure the host kernel has the snd-usb-audio module loaded (modprobe snd-usb-audio)." >&2
+fi
+
+# Check if USB audio devices are expected but missing
+if [[ -d /dev/bus/usb ]]; then
+  _usb_audio_cards="$(grep -ci 'usb\|USB' /proc/asound/cards 2>/dev/null)" || _usb_audio_cards=0
+  if [[ "${_usb_audio_cards}" -eq 0 ]]; then
+    echo "[svc-esde] Note: /dev/bus/usb is available but no USB audio cards found in ALSA."
+    echo "[svc-esde]   If you have a USB audio device, ensure the host has snd-usb-audio loaded:"
+    echo "[svc-esde]     sudo modprobe snd-usb-audio"
+    echo "[svc-esde]   Then restart the container. The device should appear in /proc/asound/cards."
+  fi
 fi
 
 # 2. Start PulseAudio
@@ -110,8 +159,15 @@ if command -v pulseaudio >/dev/null 2>&1; then
   if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
     echo "[svc-esde] Waiting for PulseAudio to discover audio devices..."
     _hw_sink=""
+    _usb_sink=""
     for _wait in $(seq 1 10); do
       sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
+      # Prefer USB ALSA sinks over HDMI sinks
+      _usb_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
+      if [[ -n "${_usb_sink}" ]]; then
+        _hw_sink="${_usb_sink}"
+        break
+      fi
       _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
       if [[ -n "${_hw_sink}" ]]; then
         break
@@ -152,6 +208,154 @@ fi
 
 if [[ ! -e /dev/dri/renderD128 && ! -e /dev/dri/card0 ]]; then
   echo "[svc-esde] Warning: No /dev/dri render/card node detected. Hardware GL may be unavailable." >&2
+fi
+
+# --- Gamepad / input device diagnostics ---
+if [[ -d /dev/input ]]; then
+  _js_devs="$(ls /dev/input/js* 2>/dev/null)" || true
+  _ev_devs="$(ls /dev/input/event* 2>/dev/null)" || true
+  _js_count="$(echo "${_js_devs}" | grep -c . 2>/dev/null)" || _js_count=0
+  _ev_count="$(echo "${_ev_devs}" | grep -c . 2>/dev/null)" || _ev_count=0
+  [[ -z "${_js_devs}" ]] && _js_count=0
+  [[ -z "${_ev_devs}" ]] && _ev_count=0
+  echo "[svc-esde] Input devices: ${_ev_count} event nodes, ${_js_count} joystick nodes."
+  for _js in /dev/input/js*; do
+    [[ -e "${_js}" ]] || continue
+    _js_base="$(basename "${_js}")"
+    _js_name="$(cat "/sys/class/input/${_js_base}/device/name" 2>/dev/null)" || true
+    if [[ -n "${_js_name}" ]]; then
+      echo "[svc-esde]   Gamepad: ${_js_name} (${_js})"
+    fi
+  done
+  # Verify the app user can read at least one event device (required by SDL2)
+  _input_access_ok=false
+  for _ev in /dev/input/event*; do
+    [[ -e "${_ev}" ]] || continue
+    if s6-setuidgid "${APP_USER:-abc}" test -r "${_ev}" 2>/dev/null; then
+      _input_access_ok=true
+    else
+      echo "[svc-esde] Warning: ${APP_USER:-abc} cannot read ${_ev} (GID=$(stat -c '%g' "${_ev}" 2>/dev/null))." >&2
+      echo "[svc-esde]   Gamepads may not work. Check /dev/input permissions or run privileged." >&2
+    fi
+    break
+  done
+  if ${_input_access_ok}; then
+    echo "[svc-esde] Input device permissions OK for ${APP_USER:-abc}."
+  fi
+else
+  echo "[svc-esde] Warning: /dev/input not found. Gamepads and keyboards will not work." >&2
+  echo "[svc-esde]   Pass --device /dev/input:/dev/input or use privileged mode." >&2
+fi
+
+# --- Emulator backend detection ---
+# ES-DE is a frontend only; it shells out to emulators (usually RetroArch).
+# Without an emulator, game launch will fail with:
+#   Error: %EMULATOR_RETROARCH% ... not found
+#
+# Supported RetroArch: https://docs.linuxserver.io/images/docker-retroarch/
+#
+# Emulators can be provided in three ways:
+#   1. Sidecar volume at /opt/emulators/<name> (esde-emulator-provider) — recommended
+#   2. INSTALL_RETROARCH=true build arg (baked into image)
+#   3. Runtime apt install (not persistent)
+
+_emulators_home="/opt/emulators"
+_esde_emuwrap="/usr/local/bin/esde-emuwrap"
+
+# Scan for sidecar-provisioned emulators and set up PATH integration
+if [[ -d "${_emulators_home}" ]]; then
+  _found_any=false
+  for _emu_dir in "${_emulators_home}"/*/; do
+    [[ -d "${_emu_dir}" ]] || continue
+    _emu_name="$(basename "${_emu_dir}")"
+    _emu_bin="${_emu_dir}bin/${_emu_name}"
+    if [[ -x "${_emu_bin}" ]] && ! command -v "${_emu_name}" >/dev/null 2>&1; then
+      # Symlink generic wrapper as the emulator name on PATH
+      if [[ -x "${_esde_emuwrap}" ]]; then
+        ln -sf "${_esde_emuwrap}" "/usr/local/bin/${_emu_name}"
+        echo "[svc-esde] Sidecar ${_emu_name} detected; linked via esde-emuwrap as /usr/local/bin/${_emu_name}"
+      else
+        ln -sf "${_emu_bin}" "/usr/local/bin/${_emu_name}"
+        echo "[svc-esde] Sidecar ${_emu_name} detected; linked binary to /usr/local/bin/${_emu_name}"
+      fi
+      if [[ -f "${_emu_dir}VERSION" ]]; then
+        echo "[svc-esde]   Version: $(cat "${_emu_dir}VERSION")"
+      fi
+      _found_any=true
+    fi
+  done
+
+  # Handle empty volume (sidecar hasn't run)
+  if ! ${_found_any} && [[ "$(find "${_emulators_home}" -maxdepth 0 -empty 2>/dev/null)" ]]; then
+    echo "[svc-esde] Note: /opt/emulators volume is mounted but empty." >&2
+    echo "[svc-esde]   The esde-emulator-provider sidecar may not have run yet." >&2
+    echo "[svc-esde]   Start it: docker compose --profile sidecar up esde-emulator-provider" >&2
+  fi
+fi
+
+# RetroArch-specific: link cores directory into standard search path
+_ra_sidecar="${_emulators_home}/retroarch"
+if [[ -d "${_ra_sidecar}/cores" ]]; then
+  ln -sfn "${_ra_sidecar}/cores" /usr/lib/libretro 2>/dev/null || true
+fi
+
+# Check RetroArch status (primary emulator for ES-DE)
+if command -v retroarch >/dev/null 2>&1; then
+  _ra_source="installed"
+  if [[ -x "${_ra_sidecar}/bin/retroarch" ]]; then
+    _ra_source="sidecar"
+  fi
+  _ra_ver="$(retroarch --version 2>&1 | head -1)" || _ra_ver="unknown"
+  echo "[svc-esde] RetroArch found (${_ra_source}): ${_ra_ver}"
+  # Check for libretro cores
+  _core_dirs=(/usr/lib/libretro /usr/lib/*/libretro "${_ra_sidecar}/cores" "${ESDE_HOME:-/config}/.config/retroarch/cores")
+  _core_count=0
+  for _cdir in "${_core_dirs[@]}"; do
+    if [[ -d "${_cdir}" ]]; then
+      _n="$(find "${_cdir}" -maxdepth 1 -name '*.so' 2>/dev/null | wc -l)"
+      _core_count=$((_core_count + _n))
+    fi
+  done
+  if [[ ${_core_count} -gt 0 ]]; then
+    echo "[svc-esde] Found ${_core_count} libretro core(s)."
+    # List available cores for diagnostics
+    for _cdir in "${_core_dirs[@]}"; do
+      [[ -d "${_cdir}" ]] || continue
+      for _core_file in "${_cdir}"/*.so; do
+        [[ -f "${_core_file}" ]] || continue
+        echo "[svc-esde]   Core: $(basename "${_core_file}")"
+      done
+    done
+  else
+    echo "[svc-esde] Warning: RetroArch is installed but no libretro cores found." >&2
+    echo "[svc-esde]   Games will fail to launch. Install cores via:" >&2
+    echo "[svc-esde]     apt install libretro-gambatte libretro-mgba libretro-snes9x ..." >&2
+    echo "[svc-esde]   Or use RetroArch: Main Menu > Online Updater > Core Downloader" >&2
+  fi
+else
+  echo "[svc-esde] ================================================" >&2
+  echo "[svc-esde] WARNING: RetroArch is NOT installed." >&2
+  echo "[svc-esde]   ES-DE is a frontend only — it needs RetroArch" >&2
+  echo "[svc-esde]   (or another emulator) to actually run games." >&2
+  echo "[svc-esde]   Game launches will fail with:" >&2
+  echo "[svc-esde]     Error: %EMULATOR_RETROARCH% ... not found" >&2
+  echo "[svc-esde] " >&2
+  echo "[svc-esde]   Option 1 — Use the emulator sidecar (recommended):" >&2
+  echo "[svc-esde]     docker compose --profile sidecar --profile default up -d" >&2
+  echo "[svc-esde]     See: https://docs.linuxserver.io/images/docker-retroarch/" >&2
+  echo "[svc-esde] " >&2
+  echo "[svc-esde]   Option 2 — Build with RetroArch included:" >&2
+  echo "[svc-esde]     docker compose build --build-arg INSTALL_RETROARCH=true" >&2
+  echo "[svc-esde] " >&2
+  echo "[svc-esde]   Option 3 — Install at runtime (not persistent):" >&2
+  echo "[svc-esde]     docker exec -it emulationstation bash" >&2
+  echo "[svc-esde]     apt update && apt install -y retroarch libretro-gambatte" >&2
+  echo "[svc-esde] " >&2
+  echo "[svc-esde]   NOTE: linuxserver/docker-retroarch is a standalone" >&2
+  echo "[svc-esde]   streaming app — it CANNOT be used as a backend for" >&2
+  echo "[svc-esde]   ES-DE. RetroArch must be in THIS container's" >&2
+  echo "[svc-esde]   filesystem (via sidecar volume or direct install)." >&2
+  echo "[svc-esde] ================================================" >&2
 fi
 
 esde_home="${ESDE_HOME:-/config}"

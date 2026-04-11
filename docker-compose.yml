@@ -23,6 +23,7 @@ x-common: &common
     - emulationstation-config:/config
     - emulationstation-roms:/roms
     - emulationstation-bios:/bios
+    - esde-emulators:/opt/emulators    # Sidecar-provisioned emulators (empty if sidecar unused)
   devices:
     - /dev/dri:/dev/dri
 
@@ -36,6 +37,12 @@ services:
     build:
       context: .
       target: default
+      args:
+        # RetroArch installation method (pick ONE):
+        #   1. Sidecar (recommended): Set 'false' here, use --profile sidecar
+        #      Allows independent RetroArch updates without rebuilding ES-DE.
+        #   2. Baked-in: Set 'true' here for a self-contained single image.
+        INSTALL_RETROARCH: 'false'
     image: docker.io/blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     environment:
@@ -64,6 +71,8 @@ services:
     build:
       context: .
       target: selkies
+      args:
+        INSTALL_RETROARCH: 'false'
     image: docker.io/blackoutsecure/emulationstation-de:latest-selkies
     container_name: emulationstation-selkies
     environment:
@@ -122,7 +131,43 @@ services:
     security_opt:
       - seccomp=unconfined
 
+  # ── Emulator Sidecar (init-container pattern) ─────────────────────
+  # Provisions emulator binaries (RetroArch + libretro cores by default)
+  # onto a shared volume.  ES-DE mounts the volume at /opt/emulators and
+  # calls emulators via esde-emuwrap, which resolves the emulator from
+  # its symlink name and sets the correct library paths.
+  #
+  # Based on the linuxserver.io community RetroArch image — no build needed
+  # for RetroArch itself.  We only add libretro cores and our provision script.
+  #   https://docs.linuxserver.io/images/docker-retroarch/
+  #
+  # Benefits:
+  #   - Update RetroArch: docker pull new linuxserver image, rebuild sidecar
+  #   - Update ES-DE: rebuild ES-DE image (emulators untouched)
+  #   - Clean ephemeral provisioning: sidecar runs, copies, exits
+  #
+  # Usage:
+  #   docker compose --profile sidecar --profile default up -d
+  #
+  # Both the 'default' and 'selkies' profiles can use this sidecar.
+  # Set INSTALL_RETROARCH=false on the ES-DE service when using sidecar.
+  esde-emulator-provider:
+    profiles: [sidecar]
+    build:
+      context: .
+      target: emulator-provider
+      args:
+        # Pin a specific linuxserver/retroarch version if desired:
+        # RETROARCH_IMAGE: lscr.io/linuxserver/retroarch:1.22.2
+        RETROARCH_IMAGE: lscr.io/linuxserver/retroarch:latest
+    image: docker.io/blackoutsecure/esde-emulator-provider:latest
+    container_name: esde-emulator-provider
+    volumes:
+      - esde-emulators:/export
+    restart: 'no'  # Run once, provision, exit
+
 volumes:
   emulationstation-config:
   emulationstation-roms:
   emulationstation-bios:
+  esde-emulators:            # Shared volume for sidecar-provisioned emulators
