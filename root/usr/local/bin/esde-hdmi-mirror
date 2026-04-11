@@ -231,9 +231,10 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
   if gst-launch-1.0 -e \
     ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
     "video/x-raw,framerate=${framerate}/1" ! \
+    queue max-size-buffers=2 leaky=downstream ! \
     videoconvert ! \
     videoscale ! \
-    kmssink ${kms_props} 2>&1; then
+    kmssink sync=false ${kms_props} 2>&1; then
     echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
     exec sleep infinity
   fi
@@ -245,9 +246,10 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
     if gst-launch-1.0 -e \
       ximagesrc display-name="${display}" use-damage=0 show-pointer=true ! \
       "video/x-raw,framerate=${framerate}/1" ! \
+      queue max-size-buffers=2 leaky=downstream ! \
       videoconvert ! \
       videoscale ! \
-      kmssink driver-name="${try_driver}" ${kms_props} 2>&1; then
+      kmssink sync=false driver-name="${try_driver}" ${kms_props} 2>&1; then
       echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
       exec sleep infinity
     fi
