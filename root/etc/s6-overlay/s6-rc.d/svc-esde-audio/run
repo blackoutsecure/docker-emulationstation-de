@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# s6 longrun: mirror audio to local USB/HDMI speakers
+# Opt-in via LOCAL_AUDIO=true in the container environment.
+set -euo pipefail
+
+if [[ "${LOCAL_AUDIO:-false}" != "true" ]]; then
+  echo "[svc-esde-audio] LOCAL_AUDIO not enabled. Service idle."
+  exec sleep infinity
+fi
+
+exec /usr/local/bin/esde-audio

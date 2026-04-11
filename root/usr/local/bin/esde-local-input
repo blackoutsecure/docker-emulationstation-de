@@ -93,12 +93,13 @@ def is_mouse(dev):
     return bool(rels & {ecodes.REL_X, ecodes.REL_Y})
 
 
-def discover_devices(known_paths=None):
+def discover_devices(known_paths=None, ignored_paths=None):
     """Find keyboards and mice, excluding gamepads and already-known paths."""
     known_paths = known_paths or set()
+    ignored_paths = ignored_paths if ignored_paths is not None else set()
     found = {}
     for path in list_devices():
-        if path in known_paths:
+        if path in known_paths or path in ignored_paths:
             continue
         try:
             dev = InputDevice(path)
@@ -107,6 +108,7 @@ def discover_devices(known_paths=None):
         if is_gamepad(dev):
             log.info("Skipping gamepad: %s (%s)", dev.name, path)
             dev.close()
+            ignored_paths.add(path)
             continue
         kinds = []
         if is_keyboard(dev):
@@ -118,6 +120,7 @@ def discover_devices(known_paths=None):
             log.info("Found %s: %s (%s)", "+".join(kinds), dev.name, path)
         else:
             dev.close()
+            ignored_paths.add(path)
     return found
 
 
@@ -139,7 +142,8 @@ def main():
 
     log.info("XTEST available. Discovering input devices...")
 
-    devices = discover_devices()
+    ignored_paths = set()
+    devices = discover_devices(ignored_paths=ignored_paths)
     if not devices:
         log.warning("No keyboard/mouse found yet. Will scan for hotplug.")
 
@@ -248,7 +252,9 @@ def main():
         now = time.monotonic()
         if now - last_scan >= SCAN_INTERVAL:
             last_scan = now
-            new_devs = discover_devices(known_paths=set(devices))
+            new_devs = discover_devices(
+                known_paths=set(devices), ignored_paths=ignored_paths,
+            )
             for p, d in new_devs.items():
                 if grab:
                     try:

@@ -45,7 +45,7 @@ services:
       ESDE_VIDEO_DRIVER: 'kmsdrm'
       UDEV: '1'
       # --- Audio (USB speakers / HDMI audio) ---
-      # PULSE_SINK: ''                 # PulseAudio sink name (auto-detects USB/ALSA)
+      # LOCAL_AUDIO_SINK: ''            # PulseAudio sink name (auto-detects USB/ALSA)
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
@@ -104,9 +104,9 @@ services:
       HDMI_MIRROR: 'true'              # 'true' to output to physical HDMI
       # MIRROR_FRAMERATE: '30'         # Mirror FPS (default: 30)
       # MIRROR_CONNECTOR_ID: ''        # DRM connector ID (auto-detect)
-      # --- Local Audio (optional — play on USB/HDMI speakers) ---
-      LOCAL_AUDIO: 'true'              # 'true' to mirror audio to local device
-      # LOCAL_AUDIO_SINK: ''           # PulseAudio sink name (auto-detect USB/ALSA)
+      # --- Audio (optional — play on USB/HDMI speakers) ---
+      LOCAL_AUDIO: 'true'             # 'true' to mirror audio to local device
+      # LOCAL_AUDIO_SINK: ''            # PulseAudio sink name (auto-detect USB/ALSA)
       # --- Local Input (optional — forward USB keyboard/mouse to Xvfb) ---
       LOCAL_INPUT: 'true'              # 'true' to forward local keyboard/mouse
       # LOCAL_INPUT_GRAB: 'true'       # 'false' to share input with console

@@ -22,68 +22,6 @@ xset s off -dpms 2>/dev/null || true
 # GLES context and crash ES-DE immediately.
 sleep 2
 
-# ── Local audio output (optional) ────────────────────────────────────
-# When LOCAL_AUDIO=true, set up a PulseAudio loopback from the virtual
-# sink (used by Selkies for browser streaming) to a local hardware sink
-# (USB speakers, HDMI audio, etc.).  Audio plays on BOTH the browser
-# stream and the local device.
-#
-# LOCAL_AUDIO_SINK can override auto-detection.  To list available sinks
-# inside the container:  pactl list short sinks
-if [[ "${LOCAL_AUDIO:-false}" == "true" ]]; then
-  echo "[esde-selkies] Local audio requested. Waiting for PulseAudio..."
-  _pa_ok=false
-  for _i in $(seq 1 30); do
-    if pulseaudio --check 2>/dev/null; then
-      _pa_ok=true
-      break
-    fi
-    sleep 1
-  done
-
-  if ${_pa_ok}; then
-    # Log all available sinks for diagnostics
-    echo "[esde-selkies] PulseAudio sinks:"
-    pactl list short sinks 2>/dev/null | while IFS= read -r _line; do
-      echo "[esde-selkies]   ${_line}"
-    done
-
-    _local_sink="${LOCAL_AUDIO_SINK:-}"
-
-    # Auto-detect: find the first ALSA hardware output sink
-    if [[ -z "${_local_sink}" ]]; then
-      _local_sink="$(pactl list short sinks 2>/dev/null \
-        | grep -i 'alsa_output' \
-        | head -1 \
-        | awk '{print $2}')" || true
-    fi
-
-    if [[ -n "${_local_sink}" ]]; then
-      # Get the default (virtual) sink that Selkies/ES-DE outputs to
-      _default_sink="$(pactl get-default-sink 2>/dev/null)" || true
-
-      if [[ -n "${_default_sink}" && "${_default_sink}" != "${_local_sink}" ]]; then
-        echo "[esde-selkies] Routing audio: ${_default_sink}.monitor → ${_local_sink}"
-        pactl load-module module-loopback \
-          source="${_default_sink}.monitor" \
-          sink="${_local_sink}" \
-          latency_msec=50 2>/dev/null \
-          && echo "[esde-selkies] Local audio loopback active." \
-          || echo "[esde-selkies] Warning: failed to load module-loopback." >&2
-      elif [[ "${_default_sink}" == "${_local_sink}" ]]; then
-        echo "[esde-selkies] Default sink is already the local device (${_local_sink}). No loopback needed."
-      else
-        echo "[esde-selkies] Warning: could not determine default sink." >&2
-      fi
-    else
-      echo "[esde-selkies] Warning: LOCAL_AUDIO=true but no ALSA output sink found." >&2
-      echo "[esde-selkies]   Ensure /dev/snd is passed through and USB speakers are connected." >&2
-    fi
-  else
-    echo "[esde-selkies] Warning: PulseAudio not running after 30s. Local audio unavailable." >&2
-  fi
-fi
-
 echo "[esde-selkies] Display: ${DISPLAY:-:1}  Resolution: $(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2}' || echo 'unknown')"
 echo "[esde-selkies] Starting ES-DE (home=${esde_home})"
 exec /usr/local/bin/es-de --home "${esde_home}" ${ESDE_ARGS:-}

@@ -312,6 +312,13 @@ COPY /root/etc/s6-overlay/s6-rc.d/svc-hdmi-mirror /etc/s6-overlay/s6-rc.d/svc-hd
 COPY /root/usr/local/bin/esde-local-input /usr/local/bin/esde-local-input
 COPY /root/etc/s6-overlay/s6-rc.d/svc-local-input /etc/s6-overlay/s6-rc.d/svc-local-input
 
+# Audio output service (set LOCAL_AUDIO=true to enable)
+COPY /root/usr/local/bin/esde-audio /usr/local/bin/esde-audio
+COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-audio /etc/s6-overlay/s6-rc.d/svc-esde-audio
+
+# ES-DE and emulator log tailer (always active)
+COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-logs /etc/s6-overlay/s6-rc.d/svc-esde-logs
+
 RUN set -eux; \
   echo "**** record build version ****"; \
   if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi; \
@@ -323,6 +330,7 @@ RUN set -eux; \
   chmod 755 /usr/local/bin/esde-selkies-launch; \
   chmod 755 /usr/local/bin/esde-hdmi-mirror; \
   chmod 755 /usr/local/bin/esde-local-input; \
+  chmod 755 /usr/local/bin/esde-audio; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/type; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/up; \
@@ -338,11 +346,23 @@ RUN set -eux; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-local-input/type; \
   chmod 755 /etc/s6-overlay/s6-rc.d/svc-local-input/dependencies.d; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-local-input/dependencies.d/*; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde-audio; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde-audio/run; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde-audio/type; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde-audio/dependencies.d; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde-audio/dependencies.d/*; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde-logs; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde-logs/run; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde-logs/type; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde-logs/dependencies.d; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde-logs/dependencies.d/*; \
   echo "**** register init service with s6 ****"; \
   mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d; \
   touch /etc/s6-overlay/s6-rc.d/user/contents.d/init-esde-config; \
   touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-hdmi-mirror; \
-  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-local-input
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-local-input; \
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-esde-audio; \
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-esde-logs
 
 EXPOSE 3000 3001
 

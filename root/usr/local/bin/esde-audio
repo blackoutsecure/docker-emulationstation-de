@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# esde-audio — Mirror PulseAudio to local USB/HDMI speakers.
+#
+# Sets up a PulseAudio module-loopback from the virtual sink (used by
+# Selkies for browser streaming) to a local hardware ALSA sink.
+# Audio plays on BOTH the browser stream AND the local device.
+#
+# This script runs as a long-lived service: it sets up the loopback,
+# then monitors the module and recreates it if the device disconnects.
+#
+# Environment:
+#   LOCAL_AUDIO       Set to 'true' to enable (checked by svc-esde-audio)
+#   LOCAL_AUDIO_SINK   PulseAudio sink name override (auto-detect if unset)
+set -euo pipefail
+
+TAG="[esde-audio]"
+app_user="${APP_USER:-abc}"
+
+# ── Wait for PulseAudio ────────────────────────────────────────────
+echo "${TAG} Waiting for PulseAudio..."
+pa_ok=false
+for i in $(seq 1 60); do
+  if s6-setuidgid "${app_user}" pulseaudio --check 2>/dev/null; then
+    pa_ok=true
+    break
+  fi
+  sleep 1
+done
+
+if ! ${pa_ok}; then
+  echo "${TAG} Error: PulseAudio not running after 60s. Local audio unavailable." >&2
+  exec sleep infinity
+fi
+echo "${TAG} PulseAudio is running."
+
+# ── Wait for hardware ALSA sink ───────────────────────────────────
+# USB devices can take time to be discovered by module-udev-detect.
+echo "${TAG} Waiting for hardware audio device..."
+local_sink="${LOCAL_AUDIO_SINK:-}"
+for i in $(seq 1 30); do
+  sink_list="$(s6-setuidgid "${app_user}" pactl list short sinks 2>/dev/null)" || true
+
+  if [[ -n "${local_sink}" ]]; then
+    # User specified a sink — check if it exists
+    if echo "${sink_list}" | grep -q "${local_sink}"; then
+      break
+    fi
+  else
+    # Auto-detect first ALSA hardware sink
+    local_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+    if [[ -n "${local_sink}" ]]; then
+      break
+    fi
+  fi
+  local_sink=""
+  sleep 1
+done
+
+# Log all sinks for diagnostics
+echo "${TAG} PulseAudio sinks:"
+s6-setuidgid "${app_user}" pactl list short sinks 2>/dev/null | while IFS= read -r line; do
+  echo "${TAG}   ${line}"
+done
+
+if [[ -z "${local_sink}" ]]; then
+  echo "${TAG} Error: No ALSA output sink found." >&2
+  echo "${TAG}   Ensure /dev/snd is passed through and speakers are connected." >&2
+  echo "${TAG}   Set LOCAL_AUDIO_SINK to the desired sink name." >&2
+  exec sleep infinity
+fi
+
+# ── Get default (virtual) sink ────────────────────────────────────
+default_sink="$(s6-setuidgid "${app_user}" pactl get-default-sink 2>/dev/null)" || true
+
+if [[ -z "${default_sink}" ]]; then
+  echo "${TAG} Error: Could not determine default PulseAudio sink." >&2
+  exec sleep infinity
+fi
+
+if [[ "${default_sink}" == "${local_sink}" ]]; then
+  echo "${TAG} Default sink is already the local device (${local_sink}). No loopback needed."
+  exec sleep infinity
+fi
+
+# ── Load module-loopback ──────────────────────────────────────────
+echo "${TAG} Routing: ${default_sink}.monitor → ${local_sink}"
+module_id="$(s6-setuidgid "${app_user}" pactl load-module module-loopback \
+  source="${default_sink}.monitor" \
+  sink="${local_sink}" \
+  latency_msec=50 2>/dev/null)" || true
+
+if [[ -z "${module_id}" ]]; then
+  echo "${TAG} Error: Failed to load module-loopback." >&2
+  echo "${TAG}   source=${default_sink}.monitor" >&2
+  echo "${TAG}   sink=${local_sink}" >&2
+  exec sleep infinity
+fi
+
+echo "${TAG} Loopback active (module #${module_id})."
+
+# ── Monitor the loopback module ───────────────────────────────────
+# Stay alive and periodically verify the module is still loaded.
+# If the USB device disconnects and reconnects, PulseAudio may
+# unload the module. We detect this and exit so s6 restarts us.
+while true; do
+  sleep 10
+  if ! s6-setuidgid "${app_user}" pactl list short modules 2>/dev/null | grep -q "^${module_id}"; then
+    echo "${TAG} Loopback module #${module_id} was unloaded (device disconnect?). Restarting." >&2
+    exit 1  # s6 will restart the service
+  fi
+done

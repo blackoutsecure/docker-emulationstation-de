@@ -1,0 +1,61 @@
+#!/usr/bin/with-contenv bash
+# s6 longrun: tail ES-DE and emulator logs to stdout for docker logs.
+#
+# In the Selkies image, ES-DE runs inside Openbox (via /defaults/autostart)
+# which is disconnected from the s6 logging pipeline. This service tails
+# the application's log files so they appear in `docker logs`.
+set -euo pipefail
+
+app_user="${APP_USER:-abc}"
+esde_home="${ESDE_HOME:-/config}"
+
+echo "[svc-esde-logs] Starting log tailer for ES-DE and emulator logs."
+
+# Ensure the log directory exists so tail -F can watch for file creation
+mkdir -p "${esde_home}/logs"
+chown "${app_user}":"${app_user}" "${esde_home}/logs" 2>/dev/null || true
+
+# Collect all log paths to tail.
+# ES-DE may write to different locations depending on version/config.
+log_files=(
+  "${esde_home}/logs/es_log.txt"
+  "${esde_home}/.emulationstation-de/es_log.txt"
+  "${esde_home}/ES-DE/logs/es_log.txt"
+)
+
+# RetroArch log (most common ES-DE emulator backend)
+ra_log="${esde_home}/.config/retroarch/logs/retroarch.log"
+log_files+=("${ra_log}")
+mkdir -p "$(dirname "${ra_log}")" 2>/dev/null || true
+chown -R "${app_user}":"${app_user}" "${esde_home}/.config/retroarch" 2>/dev/null || true
+
+# Build tail arguments: -F follows by name (survives rotation/recreation)
+# Use -n 0 to skip existing content and only show new lines from this boot.
+# Each file gets a unique prefix via separate tail|sed pipelines.
+
+pids=()
+
+cleanup() {
+  for pid in "${pids[@]}"; do
+    kill "${pid}" 2>/dev/null || true
+  done
+  jobs -p 2>/dev/null | xargs -r kill 2>/dev/null || true
+}
+trap cleanup EXIT TERM INT
+
+# ES-DE logs — prefix [es-de]
+for lf in "${log_files[@]}"; do
+  # Skip RetroArch log (has its own prefix below)
+  [[ "${lf}" == "${ra_log}" ]] && continue
+  tail -n 0 -F "${lf}" 2>/dev/null | sed --unbuffered 's/^/[es-de] /' &
+  pids+=("$!")
+done
+
+# RetroArch log — prefix [retroarch]
+tail -n 0 -F "${ra_log}" 2>/dev/null | sed --unbuffered 's/^/[retroarch] /' &
+pids+=("$!")
+
+echo "[svc-esde-logs] Tailing: ${log_files[*]}"
+
+# Stay alive — wait for any child to exit (shouldn't happen unless killed)
+wait
