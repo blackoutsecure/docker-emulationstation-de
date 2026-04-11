@@ -107,6 +107,9 @@ services:
       # --- Local Audio (optional — play on USB/HDMI speakers) ---
       LOCAL_AUDIO: 'true'              # 'true' to mirror audio to local device
       # LOCAL_AUDIO_SINK: ''           # PulseAudio sink name (auto-detect USB/ALSA)
+      # --- Local Input (optional — forward USB keyboard/mouse to Xvfb) ---
+      LOCAL_INPUT: 'true'              # 'true' to forward local keyboard/mouse
+      # LOCAL_INPUT_GRAB: 'true'       # 'false' to share input with console
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input

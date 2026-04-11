@@ -278,7 +278,9 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       ffmpeg \
       x11-utils \
       xclip \
-      alsa-utils && \
+      alsa-utils \
+      python3-evdev \
+      python3-xlib && \
     echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \
@@ -306,6 +308,10 @@ COPY /root/etc/s6-overlay/s6-rc.d/init-esde-config /etc/s6-overlay/s6-rc.d/init-
 COPY /root/usr/local/bin/esde-hdmi-mirror /usr/local/bin/esde-hdmi-mirror
 COPY /root/etc/s6-overlay/s6-rc.d/svc-hdmi-mirror /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror
 
+# Optional local input forwarding (set LOCAL_INPUT=true to enable)
+COPY /root/usr/local/bin/esde-local-input /usr/local/bin/esde-local-input
+COPY /root/etc/s6-overlay/s6-rc.d/svc-local-input /etc/s6-overlay/s6-rc.d/svc-local-input
+
 RUN set -eux; \
   echo "**** record build version ****"; \
   if [ -r /usr/local/share/es-de/build-metadata.env ]; then . /usr/local/share/es-de/build-metadata.env; fi; \
@@ -316,6 +322,7 @@ RUN set -eux; \
   echo "**** set permissions ****"; \
   chmod 755 /usr/local/bin/esde-selkies-launch; \
   chmod 755 /usr/local/bin/esde-hdmi-mirror; \
+  chmod 755 /usr/local/bin/esde-local-input; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/type; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/up; \
@@ -326,10 +333,16 @@ RUN set -eux; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/type; \
   chmod 755 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/dependencies.d; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-hdmi-mirror/dependencies.d/*; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-local-input; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-local-input/run; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-local-input/type; \
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-local-input/dependencies.d; \
+  chmod 644 /etc/s6-overlay/s6-rc.d/svc-local-input/dependencies.d/*; \
   echo "**** register init service with s6 ****"; \
   mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d; \
   touch /etc/s6-overlay/s6-rc.d/user/contents.d/init-esde-config; \
-  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-hdmi-mirror
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-hdmi-mirror; \
+  touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-local-input
 
 EXPOSE 3000 3001
 

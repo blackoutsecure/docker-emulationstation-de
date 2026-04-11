@@ -1,0 +1,31 @@
+#!/usr/bin/with-contenv bash
+# s6 longrun: forward local keyboard/mouse to virtual X display
+# Opt-in via LOCAL_INPUT=true in the container environment.
+set -euo pipefail
+
+if [[ "${LOCAL_INPUT:-false}" != "true" ]]; then
+  echo "[svc-local-input] LOCAL_INPUT not enabled. Service idle."
+  exec sleep infinity
+fi
+
+display="${DISPLAY:-:1}"
+
+# Wait for the X display to be available
+echo "[svc-local-input] Waiting for X display ${display}..."
+attempts=0
+while ! DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; do
+  attempts=$((attempts + 1))
+  if (( attempts > 60 )); then
+    echo "[svc-local-input] Error: display ${display} not ready after 60s." >&2
+    exec sleep infinity
+  fi
+  sleep 1
+done
+
+export DISPLAY="${display}"
+
+# Allow root to access the X display (XTEST injection requires connection)
+xhost +local: 2>/dev/null || true
+
+echo "[svc-local-input] Display ready. Starting input forwarding."
+exec /usr/local/bin/esde-local-input
