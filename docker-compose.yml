@@ -79,10 +79,19 @@ services:
       RESTART_APP: 'true'              # Auto-restart ES-DE if closed
       START_DOCKER: 'false'            # No Docker-in-Docker needed
       # --- Selkies Streaming ---
-      SELKIES_ENCODER: 'x264enc,jpeg'
+      SELKIES_ENCODER: 'x264enc'
       SELKIES_FRAMERATE: '60'
       SELKIES_AUDIO_ENABLED: 'true'
       SELKIES_GAMEPAD_ENABLED: 'true'
+      # Lock resolution so Selkies does not dynamically resize Xvfb.
+      # Dynamic resize can destroy the GLES context and crash ES-DE.
+      SELKIES_IS_MANUAL_RESOLUTION_MODE: 'true'
+      SELKIES_MANUAL_WIDTH: '1920'
+      SELKIES_MANUAL_HEIGHT: '1080'
+      # --- Clipboard (disabled — xclip hangs with no owner, floods logs) ---
+      SELKIES_CLIPBOARD_ENABLED: 'false'
+      SELKIES_CLIPBOARD_IN_ENABLED: 'false'
+      SELKIES_CLIPBOARD_OUT_ENABLED: 'false'
       # --- Selkies UI Tweaks (hide panels not needed for ES-DE) ---
       SELKIES_UI_SIDEBAR_SHOW_FILES: 'false'
       SELKIES_UI_SIDEBAR_SHOW_APPS: 'false'

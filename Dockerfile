@@ -274,7 +274,8 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       gstreamer1.0-plugins-good \
       gstreamer1.0-plugins-bad \
       ffmpeg \
-      x11-utils && \
+      x11-utils \
+      xclip && \
     echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \

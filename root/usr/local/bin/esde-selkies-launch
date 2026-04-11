@@ -17,5 +17,11 @@ export SDL_VIDEO_X11_FORCE_EGL="${SDL_VIDEO_X11_FORCE_EGL:-1}"
 # Disable screen blanking (the Selkies session should stay active)
 xset s off -dpms 2>/dev/null || true
 
-echo "[esde-selkies] Starting ES-DE (home=${esde_home}, DISPLAY=${DISPLAY:-:1})"
+# Wait briefly for the display to stabilise after Selkies/Xvfb init.
+# A premature launch while xrandr is still resizing can destroy the
+# GLES context and crash ES-DE immediately.
+sleep 2
+
+echo "[esde-selkies] Display: ${DISPLAY:-:1}  Resolution: $(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2}' || echo 'unknown')"
+echo "[esde-selkies] Starting ES-DE (home=${esde_home})"
 exec /usr/local/bin/es-de --home "${esde_home}" ${ESDE_ARGS:-}
