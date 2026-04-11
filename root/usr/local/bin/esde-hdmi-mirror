@@ -234,7 +234,8 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
     queue max-size-buffers=2 leaky=downstream ! \
     videoconvert ! \
     videoscale ! \
-    kmssink sync=false ${kms_props} 2>&1; then
+    kmssink sync=false ${kms_props} 2>&1 \
+    | sed --unbuffered 's/^/[hdmi-mirror] /'; then
     echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
     exec sleep infinity
   fi
@@ -249,7 +250,8 @@ if command -v gst-launch-1.0 >/dev/null 2>&1 \
       queue max-size-buffers=2 leaky=downstream ! \
       videoconvert ! \
       videoscale ! \
-      kmssink sync=false driver-name="${try_driver}" ${kms_props} 2>&1; then
+      kmssink sync=false driver-name="${try_driver}" ${kms_props} 2>&1 \
+      | sed --unbuffered 's/^/[hdmi-mirror] /'; then
       echo "[hdmi-mirror] GStreamer pipeline ended. Sleeping." >&2
       exec sleep infinity
     fi
@@ -296,33 +298,36 @@ if command -v ffmpeg >/dev/null 2>&1 && [[ -e "${fb_device}" ]]; then
 
   for pix_fmt in "${pix_fmts[@]}"; do
     echo "[hdmi-mirror] Trying ffmpeg → ${fb_device} (source=${width}x${height}, pix_fmt=${pix_fmt})."
-    ffmpeg -loglevel warning \
+    if ffmpeg -loglevel warning \
       -probesize 50M \
       -f x11grab -video_size "${width}x${height}" -framerate "${framerate}" \
       -i "${display}" \
-      -vf "${scale_filter}format=${pix_fmt}" -f fbdev "${fb_device}" 2>&1 && \
-      { echo "[hdmi-mirror] ffmpeg pipeline ended. Sleeping." >&2; exec sleep infinity; }
+      -vf "${scale_filter}format=${pix_fmt}" -f fbdev "${fb_device}" 2>&1 \
+      | sed --unbuffered 's/^/[hdmi-mirror] /'; then
+      echo "[hdmi-mirror] ffmpeg pipeline ended. Sleeping." >&2
+      exec sleep infinity
+    fi
     echo "[hdmi-mirror] pix_fmt=${pix_fmt} failed." >&2
   done
   echo "[hdmi-mirror] All ffmpeg attempts failed." >&2
 fi
 
-echo "============================================================" >&2
+echo "[hdmi-mirror] ============================================================" >&2
 echo "[hdmi-mirror] ERROR: no output method available." >&2
-echo "" >&2
-echo "  Checked for:" >&2
-echo "    1. gst-launch-1.0 + kmssink + ximagesrc" >&2
-echo "       gst-launch-1.0: $(command -v gst-launch-1.0 2>/dev/null || echo 'MISSING')" >&2
+echo "[hdmi-mirror]" >&2
+echo "[hdmi-mirror]   Checked for:" >&2
+echo "[hdmi-mirror]     1. gst-launch-1.0 + kmssink + ximagesrc" >&2
+echo "[hdmi-mirror]        gst-launch-1.0: $(command -v gst-launch-1.0 2>/dev/null || echo 'MISSING')" >&2
 if command -v gst-inspect-1.0 >/dev/null 2>&1; then
-  echo "       kmssink: $(gst-inspect-1.0 kmssink >/dev/null 2>&1 && echo 'OK' || echo 'MISSING')" >&2
-  echo "       ximagesrc: $(gst-inspect-1.0 ximagesrc >/dev/null 2>&1 && echo 'OK' || echo 'MISSING')" >&2
+  echo "[hdmi-mirror]        kmssink: $(gst-inspect-1.0 kmssink >/dev/null 2>&1 && echo 'OK' || echo 'MISSING')" >&2
+  echo "[hdmi-mirror]        ximagesrc: $(gst-inspect-1.0 ximagesrc >/dev/null 2>&1 && echo 'OK' || echo 'MISSING')" >&2
 fi
-echo "    2. ffmpeg + ${fb_device}" >&2
-echo "       ffmpeg: $(command -v ffmpeg 2>/dev/null || echo 'MISSING')" >&2
-echo "       ${fb_device}: $([[ -e "${fb_device}" ]] && echo 'EXISTS' || echo 'MISSING')" >&2
-echo "" >&2
-echo "  To fix: rebuild the image with --no-cache" >&2
-echo "    docker compose --profile selkies build --no-cache" >&2
-echo "============================================================" >&2
+echo "[hdmi-mirror]     2. ffmpeg + ${fb_device}" >&2
+echo "[hdmi-mirror]        ffmpeg: $(command -v ffmpeg 2>/dev/null || echo 'MISSING')" >&2
+echo "[hdmi-mirror]        ${fb_device}: $([[ -e "${fb_device}" ]] && echo 'EXISTS' || echo 'MISSING')" >&2
+echo "[hdmi-mirror]" >&2
+echo "[hdmi-mirror]   To fix: rebuild the image with --no-cache" >&2
+echo "[hdmi-mirror]     docker compose --profile selkies build --no-cache" >&2
+echo "[hdmi-mirror] ============================================================" >&2
 echo "[hdmi-mirror] Sleeping to avoid restart loop." >&2
 exec sleep infinity

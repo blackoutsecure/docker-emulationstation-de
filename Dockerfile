@@ -167,6 +167,8 @@ RUN echo "**** install runtime dependencies ****" && \
       dbus-system-bus-common \
       dbus-x11 \
       pulseaudio \
+      pulseaudio-utils \
+      alsa-utils \
       xinit \
       x11-xserver-utils \
       xserver-xorg \
@@ -275,7 +277,8 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       gstreamer1.0-plugins-bad \
       ffmpeg \
       x11-utils \
-      xclip && \
+      xclip \
+      alsa-utils && \
     echo "**** cleanup ****" && \
     apt-get clean && \
     rm -rf \

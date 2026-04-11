@@ -44,6 +44,8 @@ services:
       XDG_RUNTIME_DIR: /run/esde
       ESDE_VIDEO_DRIVER: 'kmsdrm'
       UDEV: '1'
+      # --- Audio (USB speakers / HDMI audio) ---
+      # PULSE_SINK: ''                 # PulseAudio sink name (auto-detects USB/ALSA)
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
@@ -102,6 +104,9 @@ services:
       HDMI_MIRROR: 'true'              # 'true' to output to physical HDMI
       # MIRROR_FRAMERATE: '30'         # Mirror FPS (default: 30)
       # MIRROR_CONNECTOR_ID: ''        # DRM connector ID (auto-detect)
+      # --- Local Audio (optional — play on USB/HDMI speakers) ---
+      LOCAL_AUDIO: 'true'              # 'true' to mirror audio to local device
+      # LOCAL_AUDIO_SINK: ''           # PulseAudio sink name (auto-detect USB/ALSA)
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input

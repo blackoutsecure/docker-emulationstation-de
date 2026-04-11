@@ -104,9 +104,20 @@ if command -v pulseaudio >/dev/null 2>&1; then
       echo "[svc-esde] Warning: PulseAudio failed to start. Audio may be unavailable." >&2
   fi
 
-  # 3. Configure default sink (wait briefly for PulseAudio to discover devices)
+  # 3. Configure default sink (wait for PulseAudio to discover devices)
+  # USB audio devices can take several seconds to be discovered by
+  # module-udev-detect.  Wait up to 10s for a hardware ALSA sink.
   if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
-    sleep 1
+    echo "[svc-esde] Waiting for PulseAudio to discover audio devices..."
+    _hw_sink=""
+    for _wait in $(seq 1 10); do
+      sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
+      _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+      if [[ -n "${_hw_sink}" ]]; then
+        break
+      fi
+      sleep 1
+    done
 
     # Log all discovered sinks for troubleshooting
     sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
@@ -119,11 +130,14 @@ if command -v pulseaudio >/dev/null 2>&1; then
       echo "[svc-esde] Warning: PulseAudio running but no sinks detected." >&2
     fi
 
-    # Set explicit sink if PULSE_SINK is defined, otherwise auto-select the first one
+    # Set explicit sink if PULSE_SINK is defined, otherwise prefer hardware ALSA sink
     if [[ -n "${PULSE_SINK:-}" ]]; then
       s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${PULSE_SINK}" 2>/dev/null && \
         echo "[svc-esde] PulseAudio default sink set to: ${PULSE_SINK}" || \
         echo "[svc-esde] Warning: Could not set PULSE_SINK=${PULSE_SINK}. Check sink names above." >&2
+    elif [[ -n "${_hw_sink}" ]]; then
+      s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${_hw_sink}" 2>/dev/null || true
+      echo "[svc-esde] PulseAudio default sink set to hardware device: ${_hw_sink}"
     elif [[ -n "${sink_list}" ]]; then
       default_sink="$(echo "${sink_list}" | head -1 | awk '{print $2}')" || true
       if [[ -n "${default_sink:-}" ]]; then
