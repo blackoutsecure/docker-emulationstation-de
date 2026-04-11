@@ -39,6 +39,28 @@ if [[ -d /dev/bus/usb ]]; then
   # Retrigger udev for USB sound devices so PulseAudio can discover them
   udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
   udevadm settle --timeout=5 2>/dev/null || true
+
+  # Wait for USB audio cards to fully enumerate (may take several seconds)
+  _usb_found=false
+  for _i in $(seq 1 15); do
+    if grep -qi 'usb' /proc/asound/cards 2>/dev/null; then
+      _usb_found=true; break
+    fi
+    for _scard in /sys/class/sound/card*/device; do
+      [[ -L "${_scard}" ]] || continue
+      if [[ "$(basename "$(readlink -f "${_scard}/subsystem" 2>/dev/null)" 2>/dev/null)" == "usb" ]]; then
+        _usb_found=true; break 2
+      fi
+    done
+    # Retrigger every 5s
+    if (( _i % 5 == 0 )); then
+      udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
+      udevadm settle --timeout=3 2>/dev/null || true
+    fi
+    sleep 1
+  done
+  ${_usb_found} && echo "${TAG} USB audio card(s) detected in ALSA." \
+    || echo "${TAG} Warning: No USB audio cards found in ALSA after 15s." >&2
 fi
 
 # ── Wait for hardware ALSA sink ───────────────────────────────────
@@ -54,10 +76,14 @@ for i in $(seq 1 30); do
       break
     fi
   else
-    # Auto-detect: prefer USB ALSA sink over HDMI
+    # Auto-detect priority: 1) USB audio  2) 3.5mm analog  3) any ALSA (usually HDMI)
     local_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
     if [[ -z "${local_sink}" ]]; then
-      # Fall back to any ALSA hardware sink
+      # 3.5mm analog on RPi appears as bcm2835*.analog or platform-*.analog
+      local_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
+    fi
+    if [[ -z "${local_sink}" ]]; then
+      # Fall back to any ALSA hardware sink (usually HDMI)
       local_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
     fi
     if [[ -n "${local_sink}" ]]; then

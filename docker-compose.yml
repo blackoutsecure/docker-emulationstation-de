@@ -51,8 +51,16 @@ services:
       XDG_RUNTIME_DIR: /run/esde
       ESDE_VIDEO_DRIVER: 'kmsdrm'
       UDEV: '1'
-      # --- Audio (USB speakers / HDMI audio) ---
-      # LOCAL_AUDIO_SINK: ''            # PulseAudio sink name (auto-detects USB/ALSA)
+      # --- Audio (USB speakers / HDMI audio / 3.5mm jack) ---
+      # Auto-detect priority: USB audio > 3.5mm analog > HDMI
+      # USB audio requires the host kernel to have snd-usb-audio loaded:
+      #   sudo modprobe snd-usb-audio
+      # Verify with: cat /proc/asound/cards  (should list the USB device)
+      # LOCAL_AUDIO_SINK: ''            # Override auto-detect with a specific PulseAudio sink name
+      # --- Gamepad mapping ---
+      # Generic USB joysticks (e.g. DragonRise) need an SDL2 GameController
+      # mapping.  Generate one at https://github.com/gabomdq/SDL_GameControllerDB
+      # SDL_GAMECONTROLLERCONFIG: ''    # Paste mapping string here
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input

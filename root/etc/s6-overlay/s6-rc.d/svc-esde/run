@@ -135,14 +135,52 @@ else
   echo "[svc-esde]   Ensure the host kernel has the snd-usb-audio module loaded (modprobe snd-usb-audio)." >&2
 fi
 
-# Check if USB audio devices are expected but missing
+# Check if USB audio devices are expected but missing.
+# After modprobe + udev settle, USB audio cards may take several seconds to
+# fully enumerate (chipset initialization, firmware load, etc.).
+# Wait up to 15 seconds, retriggering udev periodically.
 if [[ -d /dev/bus/usb ]]; then
-  _usb_audio_cards="$(grep -ci 'usb\|USB' /proc/asound/cards 2>/dev/null)" || _usb_audio_cards=0
-  if [[ "${_usb_audio_cards}" -eq 0 ]]; then
-    echo "[svc-esde] Note: /dev/bus/usb is available but no USB audio cards found in ALSA."
-    echo "[svc-esde]   If you have a USB audio device, ensure the host has snd-usb-audio loaded:"
-    echo "[svc-esde]     sudo modprobe snd-usb-audio"
-    echo "[svc-esde]   Then restart the container. The device should appear in /proc/asound/cards."
+  _usb_audio_found=false
+  for _usb_wait in $(seq 1 15); do
+    # Method 1: check /proc/asound/cards for USB-named cards
+    if grep -qi 'usb' /proc/asound/cards 2>/dev/null; then
+      _usb_audio_found=true; break
+    fi
+    # Method 2: check sysfs for cards on the USB subsystem
+    # (catches devices whose ALSA name does not contain "USB")
+    for _scard in /sys/class/sound/card*/device; do
+      [[ -L "${_scard}" ]] || continue
+      if [[ "$(basename "$(readlink -f "${_scard}/subsystem" 2>/dev/null)" 2>/dev/null)" == "usb" ]]; then
+        _usb_audio_found=true; break 2
+      fi
+    done
+    # Retrigger sound subsystem every 5s in case the device appeared late
+    if (( _usb_wait % 5 == 0 )); then
+      udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
+      udevadm settle --timeout=3 2>/dev/null || true
+    fi
+    sleep 1
+  done
+
+  if ${_usb_audio_found}; then
+    echo "[svc-esde] USB audio card(s) detected in ALSA."
+  else
+    echo "[svc-esde] Note: /dev/bus/usb is available but no USB audio cards found in ALSA after 15s."
+    echo "[svc-esde]   If you have a USB audio device:"
+    echo "[svc-esde]     1. On the HOST, run: sudo modprobe snd-usb-audio"
+    echo "[svc-esde]     2. On the HOST, verify: cat /proc/asound/cards  (should list your device)"
+    echo "[svc-esde]     3. Ensure the device is plugged in and powered"
+    echo "[svc-esde]     4. Restart the container after steps 1-3"
+    # Show visible USB devices for diagnostics
+    if [[ -d /sys/bus/usb/devices ]]; then
+      echo "[svc-esde]   USB devices visible to the container:"
+      for _uprod in /sys/bus/usb/devices/*/product; do
+        [[ -r "${_uprod}" ]] || continue
+        _mfr="$(cat "$(dirname "${_uprod}")/manufacturer" 2>/dev/null)" || true
+        _prd="$(cat "${_uprod}" 2>/dev/null)" || true
+        [[ -n "${_prd}" ]] && echo "[svc-esde]     ${_mfr:+${_mfr} }${_prd}"
+      done
+    fi
   fi
 fi
 
@@ -155,20 +193,21 @@ if command -v pulseaudio >/dev/null 2>&1; then
 
   # 3. Configure default sink (wait for PulseAudio to discover devices)
   # USB audio devices can take several seconds to be discovered by
-  # module-udev-detect.  Wait up to 10s for a hardware ALSA sink.
+  # module-udev-detect.  Wait up to 20s for a hardware ALSA sink.
   if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
     echo "[svc-esde] Waiting for PulseAudio to discover audio devices..."
     _hw_sink=""
-    _usb_sink=""
-    for _wait in $(seq 1 10); do
+    for _wait in $(seq 1 20); do
       sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
-      # Prefer USB ALSA sinks over HDMI sinks
-      _usb_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
-      if [[ -n "${_usb_sink}" ]]; then
-        _hw_sink="${_usb_sink}"
-        break
+      # Priority: 1) USB audio  2) 3.5mm analog  3) any ALSA (usually HDMI)
+      _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
+      if [[ -z "${_hw_sink}" ]]; then
+        # 3.5mm analog on RPi appears as bcm2835*.analog or platform-*.analog
+        _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
       fi
-      _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+      if [[ -z "${_hw_sink}" ]]; then
+        _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+      fi
       if [[ -n "${_hw_sink}" ]]; then
         break
       fi
@@ -242,6 +281,21 @@ if [[ -d /dev/input ]]; then
   if ${_input_access_ok}; then
     echo "[svc-esde] Input device permissions OK for ${APP_USER:-abc}."
   fi
+
+  # SDL2 GameController mapping diagnostics.
+  # ES-DE uses the SDL2 GameController API, which only recognises joysticks that
+  # have a mapping in SDL2's built-in gamecontrollerdb.  Generic / no-name USB
+  # joysticks (e.g. DragonRise) are often missing and will be invisible to ES-DE
+  # even though they appear under /dev/input.
+  if [[ ${_js_count} -gt 0 ]]; then
+    echo "[svc-esde] Note: ES-DE uses the SDL2 GameController API."
+    echo "[svc-esde]   Only controllers with an SDL2 mapping will be usable."
+    echo "[svc-esde]   If a gamepad listed above is not detected by ES-DE, add a"
+    echo "[svc-esde]   custom mapping via the SDL_GAMECONTROLLERCONFIG env variable."
+    echo "[svc-esde]   Generate mappings: https://github.com/gabomdq/SDL_GameControllerDB"
+  fi
+  echo "[svc-esde] Note: ES-DE does not log individual button/key press events."
+  echo "[svc-esde]   To debug input, run inside the container: evtest /dev/input/eventN"
 else
   echo "[svc-esde] Warning: /dev/input not found. Gamepads and keyboards will not work." >&2
   echo "[svc-esde]   Pass --device /dev/input:/dev/input or use privileged mode." >&2
