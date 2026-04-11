@@ -59,9 +59,9 @@
   },
   "repository": "https://gitlab.com/es-de/",
   "stable": {
-    "androidDate": "2025-11-07",
-    "androidVersionCode": "56",
-    "androidVersionName": "3.4.0-56",
+    "androidDate": "2026-04-10",
+    "androidVersionCode": "58",
+    "androidVersionName": "3.4.1-58",
     "date": "2026-04-10",
     "packages": [
       {
