@@ -52,10 +52,19 @@ services:
       ESDE_VIDEO_DRIVER: 'kmsdrm'
       UDEV: '1'
       # --- Audio (USB speakers / HDMI audio / 3.5mm jack) ---
-      # Auto-detect priority: USB audio > 3.5mm analog > HDMI
-      # USB audio requires the host kernel to have snd-usb-audio loaded:
-      #   sudo modprobe snd-usb-audio
-      # Verify with: cat /proc/asound/cards  (should list the USB device)
+      # ESDE_AUDIO_OUTPUT controls which audio output to use:
+      #   auto    — USB > 3.5mm analog > HDMI (default)
+      #   analog  — Force 3.5mm headphone jack (RPi only)
+      #   hdmi    — Force HDMI audio
+      #   usb     — Force USB audio device
+      # ESDE_AUDIO_OUTPUT: 'auto'
+      #
+      # For RPi 3.5mm audio, you MUST also set this Balena device variable:
+      #   BALENA_HOST_CONFIG_dtparam = "audio=on"
+      #
+      # For RPi HDMI audio, if no sound plays set:
+      #   BALENA_HOST_CONFIG_hdmi_drive = 2
+      #
       # LOCAL_AUDIO_SINK: ''            # Override auto-detect with a specific PulseAudio sink name
       # --- Gamepad mapping ---
       # Generic USB joysticks (e.g. DragonRise) need an SDL2 GameController

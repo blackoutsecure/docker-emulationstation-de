@@ -87,11 +87,51 @@ if [[ -d /dev/bus/usb ]]; then
   modprobe snd-usb-audio 2>/dev/null || true
 fi
 
+# --- RPi detection (used for bcm2835 analog, HDMI hints, etc.) ---
+_is_rpi=false
+if [[ -e /proc/device-tree/model ]]; then
+  _model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)" || true
+  [[ "${_model}" == *"Raspberry"* ]] && _is_rpi=true
+elif grep -qi 'raspberry\|bcm27\|bcm28' /proc/cpuinfo 2>/dev/null; then
+  _is_rpi=true
+fi
+
+# --- Audio output preference ---
+# ESDE_AUDIO_OUTPUT selects audio output:
+#   analog  — Force 3.5mm headphone jack (RPi only, requires dtparam=audio=on)
+#   hdmi    — Force HDMI audio
+#   usb     — Force USB audio device
+#   auto    — Auto-detect: USB > analog > HDMI (default)
+_audio_output="${ESDE_AUDIO_OUTPUT:-auto}"
+
 # Load the bcm2835 audio module for Raspberry Pi 3.5mm analog output.
 # On modern RPi kernels with vc4, this module is not loaded by default
 # because the vc4 HDMI driver handles digital audio on its own.
 # Without this module, the 3.5mm headphone jack will be invisible to ALSA.
-modprobe snd_bcm2835 2>/dev/null || true
+_bcm2835_loaded=false
+if ${_is_rpi}; then
+  if modprobe snd_bcm2835 2>/dev/null; then
+    # Module loaded — wait up to 5s for the ALSA card to appear
+    for _bcm_wait in $(seq 1 10); do
+      if grep -qi 'bcm2835\|Headphones' /proc/asound/cards 2>/dev/null; then
+        _bcm2835_loaded=true
+        break
+      fi
+      # Retrigger udev sound subsystem to pick up new card
+      udevadm trigger --action=add --subsystem-match=sound 2>/dev/null || true
+      sleep 0.5
+    done
+  fi
+  if ! ${_bcm2835_loaded}; then
+    echo "[svc-esde] Warning: RPi 3.5mm analog audio NOT available." >&2
+    echo "[svc-esde]   The snd_bcm2835 module did not create an ALSA card." >&2
+    echo "[svc-esde]   To enable 3.5mm audio, set Balena device variable:" >&2
+    echo "[svc-esde]     BALENA_HOST_CONFIG_dtparam = \"audio=on\"" >&2
+    echo "[svc-esde]   Then reboot the device." >&2
+  fi
+else
+  modprobe snd_bcm2835 2>/dev/null || true
+fi
 
 # --- Status summary variables (collected during setup, printed after ES-DE starts) ---
 _summary_audio=""
@@ -185,14 +225,29 @@ if command -v pulseaudio >/dev/null 2>&1; then
     _hw_sink=""
     for _wait in $(seq 1 20); do
       sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
-      # Priority: 1) USB audio  2) 3.5mm analog  3) any ALSA (usually HDMI)
-      _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
-      if [[ -z "${_hw_sink}" ]]; then
-        _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
-      fi
-      if [[ -z "${_hw_sink}" ]]; then
-        _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
-      fi
+
+      # Sink selection respects ESDE_AUDIO_OUTPUT preference
+      case "${_audio_output}" in
+        analog)
+          _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
+          ;;
+        hdmi)
+          _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*hdmi' | head -1 | awk '{print $2}')" || true
+          ;;
+        usb)
+          _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
+          ;;
+        *)
+          # auto: Priority: 1) USB audio  2) 3.5mm analog  3) any ALSA (usually HDMI)
+          _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
+          if [[ -z "${_hw_sink}" ]]; then
+            _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
+          fi
+          if [[ -z "${_hw_sink}" ]]; then
+            _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
+          fi
+          ;;
+      esac
       if [[ -n "${_hw_sink}" ]]; then
         break
       fi
@@ -357,22 +412,20 @@ XMLEOF
   [[ -z "${_summary_esde_audio}" ]] && _summary_esde_audio="ES-DE: no settings file (first boot)"
 fi
 
-# --- HDMI audio validation ---
-# On RPi, even when PulseAudio is unmuted and volume is set, HDMI audio requires
-# the sink to actually be in RUNNING or IDLE state. Use aplay to send a short
-# silence burst which forces the ALSA device open and triggers ELD/EDID audio
-# handshake. Without this, some HDMI receivers won't start their audio decoder.
+# --- Audio device wake ---
+# Send a brief silence burst to force the ALSA device open. This is needed for:
+#   - HDMI: triggers ELD/EDID audio handshake with the display
+#   - bcm2835 analog: forces the PWM audio driver to initialize
+# Without this, some outputs won't produce sound until audio data flows.
 if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
   _active_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
-  if [[ -n "${_active_sink}" && "${_active_sink}" == *"hdmi"* ]]; then
-    # Extract ALSA card/device from the sink name for aplay
-    # Sink names like "alsa_output.1.hdmi-stereo" -> card 1
+  if [[ -n "${_active_sink}" && "${_active_sink}" == alsa_output* ]]; then
+    # Extract ALSA card number from the sink name
+    # Sink names like "alsa_output.1.hdmi-stereo" or "alsa_output.0.analog-stereo" -> card number
     _alsa_card="$(echo "${_active_sink}" | grep -oP 'alsa_output\.\K[0-9]+')" || true
     if [[ -n "${_alsa_card}" ]] && command -v speaker-test >/dev/null 2>&1; then
-      # Send 1 second of silence via speaker-test to wake the HDMI audio link
       timeout 2 speaker-test -D "plughw:${_alsa_card},0" -t sine -f 0 -l 1 >/dev/null 2>&1 || true
     elif [[ -n "${_alsa_card}" ]] && command -v aplay >/dev/null 2>&1; then
-      # Fallback: send a tiny WAV of silence
       dd if=/dev/zero bs=1 count=8000 2>/dev/null | \
         aplay -D "plughw:${_alsa_card},0" -r 8000 -f S16_LE -c 2 -q 2>/dev/null || true
     fi
@@ -611,11 +664,20 @@ emit_startup_summary() {
   echo "[svc-esde] ${_summary_input}"
   echo "[svc-esde] ${_summary_emulator}"
   echo "[svc-esde] ${_summary_esde_audio}"
+  echo "[svc-esde] Audio output: ${_audio_output} (ESDE_AUDIO_OUTPUT=${ESDE_AUDIO_OUTPUT:-<unset>})"
   echo "[svc-esde] Video: ${_video_driver} (ESDE_VIDEO_DRIVER=${ESDE_VIDEO_DRIVER:-<unset>})"
   echo "[svc-esde] Tailing: es_log.txt, Xorg.log, retroarch.log"
   echo "[svc-esde] ES-DE is idle at menu — logs appear on activity (input config, game launch, errors)"
-  if [[ "${_summary_sink}" == *"hdmi"* && "${_is_rpi}" == "true" ]]; then
-    echo "[svc-esde] No HDMI audio? Set Balena device var BALENA_HOST_CONFIG_hdmi_drive=2"
+  # Actionable hints based on detected state
+  if [[ "${_is_rpi}" == "true" ]]; then
+    if [[ "${_audio_output}" == "analog" || "${_audio_output}" == "auto" ]] && ! ${_bcm2835_loaded}; then
+      echo "[svc-esde] ⚠ 3.5mm audio: bcm2835 not loaded! Set Balena device var:"
+      echo "[svc-esde]   BALENA_HOST_CONFIG_dtparam = \"audio=on\""
+      echo "[svc-esde]   Then reboot the device."
+    fi
+    if [[ "${_summary_sink}" == *"hdmi"* ]]; then
+      echo "[svc-esde] No HDMI audio? Set Balena device var BALENA_HOST_CONFIG_hdmi_drive=2"
+    fi
   fi
   echo "[svc-esde] ═══════════════════════════════════════════════"
   echo ""
@@ -708,36 +770,10 @@ fi
 # EGL_BAD_MATCH because vc4 doesn't support context creation.
 # KMSDRM will *never* work on RPi with this split architecture; X11 with the
 # modesetting driver + glamor is the correct path.
-_is_rpi=false
-# Method 1: device-tree model string (most reliable, works in privileged containers)
-if [[ -r /proc/device-tree/model ]]; then
-  _dt_model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)" || true
-  if [[ "${_dt_model}" == *"Raspberry Pi"* ]]; then
-    _is_rpi=true
-  fi
-fi
-# Method 2: sysfs DRM driver name
-if ! ${_is_rpi}; then
-  for _card in /dev/dri/card*; do
-    [[ -e "${_card}" ]] || continue
-    _card_name="$(basename "${_card}")"
-    _drv_link="/sys/class/drm/${_card_name}/device/driver"
-    if [[ -L "${_drv_link}" ]]; then
-      _drv_name="$(basename "$(readlink -f "${_drv_link}")")"
-      if [[ "${_drv_name}" = "vc4-drm" || "${_drv_name}" = "vc4" ]]; then
-        _is_rpi=true
-        break
-      fi
-    fi
-  done
-fi
-# Method 3: ALSA card names containing "vc4hdmi" (available even without sysfs)
-if ! ${_is_rpi} && [[ -r /proc/asound/cards ]]; then
-  if grep -qi 'vc4hdmi\|vc4-hdmi' /proc/asound/cards 2>/dev/null; then
-    _is_rpi=true
-  fi
-fi
+# (_is_rpi was already detected at the top of the script for audio setup)
 ${_is_rpi} && _summary_audio="${_summary_audio} | RPi detected"
+${_bcm2835_loaded} && _summary_audio="${_summary_audio} | bcm2835: loaded"
+${_is_rpi} && ! ${_bcm2835_loaded} && _summary_audio="${_summary_audio} | bcm2835: NOT loaded (no 3.5mm)"
 
 # On RPi, if HDMI negotiates DVI mode (no audio), PulseAudio will have the sink
 # but audio won't play. Check EDID/status via DRM and note in summary.
