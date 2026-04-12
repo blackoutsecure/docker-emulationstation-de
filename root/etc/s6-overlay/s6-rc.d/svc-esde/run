@@ -218,7 +218,25 @@ if command -v pulseaudio >/dev/null 2>&1; then
       echo "[svc-esde] Warning: PulseAudio failed to start. Audio may be unavailable." >&2
   fi
 
-  # 3. Configure default sink (wait for PulseAudio to discover devices)
+  # 3. Fix PulseAudio card profiles
+  # bcm2835 often gets a "stereo-fallback" profile instead of "analog-stereo"
+  # which doesn't route audio properly. Explicitly set the correct profile.
+  if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    if ${_bcm2835_loaded}; then
+      # Find the PulseAudio card index for the bcm2835 device and set analog profile
+      _bcm_card_index="$(s6-setuidgid "${APP_USER:-abc}" pactl list short cards 2>/dev/null \
+        | grep -i 'bcm2835\|Headphones' | head -1 | awk '{print $1}')" || true
+      if [[ -n "${_bcm_card_index}" ]]; then
+        # Try output:analog-stereo first (PulseAudio 14+), fall back to analog-stereo
+        s6-setuidgid "${APP_USER:-abc}" pactl set-card-profile "${_bcm_card_index}" output:analog-stereo 2>/dev/null || \
+          s6-setuidgid "${APP_USER:-abc}" pactl set-card-profile "${_bcm_card_index}" analog-stereo 2>/dev/null || true
+        # Give PA a moment to recreate sinks with the new profile
+        sleep 1
+      fi
+    fi
+  fi
+
+  # 4. Configure default sink (wait for PulseAudio to discover devices)
   # USB audio devices can take several seconds to be discovered by
   # module-udev-detect.  Wait up to 20s for a hardware ALSA sink.
   if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
@@ -227,9 +245,10 @@ if command -v pulseaudio >/dev/null 2>&1; then
       sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
 
       # Sink selection respects ESDE_AUDIO_OUTPUT preference
+      # Note: bcm2835 can appear as "analog-stereo" OR "stereo-fallback"
       case "${_audio_output}" in
         analog)
-          _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
+          _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*\(analog\|stereo-fallback\)' | grep -iv 'hdmi' | head -1 | awk '{print $2}')" || true
           ;;
         hdmi)
           _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*hdmi' | head -1 | awk '{print $2}')" || true
@@ -241,7 +260,7 @@ if command -v pulseaudio >/dev/null 2>&1; then
           # auto: Priority: 1) USB audio  2) 3.5mm analog  3) any ALSA (usually HDMI)
           _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
           if [[ -z "${_hw_sink}" ]]; then
-            _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
+            _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*\(analog\|stereo-fallback\)' | grep -iv 'hdmi' | head -1 | awk '{print $2}')" || true
           fi
           if [[ -z "${_hw_sink}" ]]; then
             _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output' | head -1 | awk '{print $2}')" || true
@@ -339,6 +358,31 @@ if [[ -n "${_esde_settings}" ]]; then
   _esde_audio_dev="$(grep -oP 'name="AudioDevice"\s+value="\K[^"]+' "${_esde_settings}" 2>/dev/null)" || true
 
   _summary_esde_audio="ES-DE: vol=${_esde_vol:-default} device=\"${_esde_audio_dev:-auto}\""
+
+  # If ES-DE has no AudioDevice set (empty or missing), update the settings file
+  # with the currently selected PulseAudio sink's description so ES-DE uses the
+  # correct output device.
+  if [[ -z "${_esde_audio_dev}" ]] && s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    _active_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
+    if [[ -n "${_active_sink}" ]]; then
+      _sink_desc="$(s6-setuidgid "${APP_USER:-abc}" pactl list sinks 2>/dev/null | awk -v sink="${_active_sink}" '
+        /^\tName:/ { found=($2 == sink) }
+        found && /^\tDescription:/ { sub(/^\tDescription: /, ""); print; exit }
+      ')" || true
+      if [[ -n "${_sink_desc}" ]]; then
+        if grep -q 'name="AudioDevice"' "${_esde_settings}" 2>/dev/null; then
+          # Update existing AudioDevice entry
+          sed -i 's|name="AudioDevice" value="[^"]*"|name="AudioDevice" value="'"${_sink_desc}"'"|' "${_esde_settings}" 2>/dev/null || true
+        else
+          # Insert AudioDevice setting before closing tag or at end
+          sed -i '/<\/[^>]*>$/i\<string name="AudioDevice" value="'"${_sink_desc}"'" />' "${_esde_settings}" 2>/dev/null || \
+            echo '<string name="AudioDevice" value="'"${_sink_desc}"'" />' >> "${_esde_settings}" 2>/dev/null || true
+        fi
+        _esde_audio_dev="${_sink_desc}"
+        _summary_esde_audio="ES-DE: vol=${_esde_vol:-default} device=\"${_esde_audio_dev}\" (auto-set)"
+      fi
+    fi
+  fi
 
   # Map ES-DE's AudioDevice (SDL2 description) to a PulseAudio sink name.
   # SDL2's PulseAudio driver lists sinks by their description, not their name.
@@ -675,7 +719,8 @@ emit_startup_summary() {
       echo "[svc-esde]   BALENA_HOST_CONFIG_dtparam = \"audio=on\""
       echo "[svc-esde]   Then reboot the device."
     fi
-    if [[ "${_summary_sink}" == *"hdmi"* ]]; then
+    _chosen_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
+    if [[ "${_chosen_sink}" == *"hdmi"* ]]; then
       echo "[svc-esde] No HDMI audio? Set Balena device var BALENA_HOST_CONFIG_hdmi_drive=2"
     fi
   fi
