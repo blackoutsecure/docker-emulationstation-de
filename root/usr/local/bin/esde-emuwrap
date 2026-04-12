@@ -51,9 +51,6 @@ if [[ ! -x "${EMU_BIN}" ]]; then
   echo "${TAG} To fix, start the sidecar:" >&2
   echo "${TAG}   docker compose --profile sidecar up esde-emulator-provider" >&2
   echo "${TAG} " >&2
-  echo "${TAG} Or build the emulator into the image:" >&2
-  echo "${TAG}   docker compose build --build-arg INSTALL_RETROARCH=true" >&2
-  echo "${TAG} " >&2
   echo "${TAG} Supported emulators:" >&2
   echo "${TAG}   RetroArch: https://docs.linuxserver.io/images/docker-retroarch/" >&2
   echo "${TAG} ================================================" >&2

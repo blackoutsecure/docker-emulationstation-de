@@ -197,46 +197,6 @@ RUN echo "**** install runtime dependencies ****" && \
       /var/lib/apt/lists/* \
       /var/tmp/*
 
-# --- Optional: RetroArch + libretro cores (baked into image) ---
-# ES-DE is a frontend only — it launches emulators as child processes.
-# RetroArch MUST be in the same container filesystem (not a separate container)
-# because ES-DE fork+exec's it with the same display, audio, and GPU context.
-#
-# RECOMMENDED: Use the emulator sidecar instead (--profile sidecar).
-# The sidecar pulls directly from linuxserver/docker-retroarch — no build needed.
-#   https://docs.linuxserver.io/images/docker-retroarch/
-#
-# Set INSTALL_RETROARCH=true at build time to bake RetroArch into this image.
-# This installs from Ubuntu repos (may differ from the linuxserver PPA version).
-# Default: false (keeps image lean; use the sidecar or apt-install at runtime).
-ARG INSTALL_RETROARCH=false
-RUN set -eux; \
-    if [ "${INSTALL_RETROARCH}" = "true" ]; then \
-      echo "**** install RetroArch + libretro cores ****"; \
-      apt-get update; \
-      apt-get install -y --no-install-recommends retroarch; \
-      for core in \
-        libretro-gambatte \
-        libretro-mgba \
-        libretro-snes9x \
-        libretro-nestopia \
-        libretro-genesis-plus-gx \
-        libretro-beetle-pce-fast \
-      ; do \
-        apt-get install -y --no-install-recommends "$core" 2>/dev/null || \
-          echo "Note: $core not available for this architecture, skipping."; \
-      done; \
-      mkdir -p /usr/lib/libretro; \
-      for dir in /usr/lib/*/libretro; do \
-        [ -d "$dir" ] || continue; \
-        for f in "$dir"/*.so; do \
-          [ -f "$f" ] && ln -sf "$f" /usr/lib/libretro/; \
-        done; \
-      done; \
-      apt-get clean; \
-      rm -rf /var/lib/apt/lists/* /tmp/*; \
-    fi
-
 COPY --from=builder /out/usr/local/ /usr/local/
 COPY --from=builder /out/defaults/roms/ /defaults/roms/
 
@@ -336,37 +296,6 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
       /tmp/* \
       /var/lib/apt/lists/* \
       /var/tmp/*
-
-# --- Optional: RetroArch + libretro cores (baked into image) ---
-# Same rationale as the default target — ES-DE needs retroarch in-process.
-# RECOMMENDED: Use the emulator sidecar instead (--profile sidecar).
-ARG INSTALL_RETROARCH=false
-RUN set -eux; \
-    if [ "${INSTALL_RETROARCH}" = "true" ]; then \
-      echo "**** install RetroArch + libretro cores ****"; \
-      apt-get update; \
-      apt-get install -y --no-install-recommends retroarch; \
-      for core in \
-        libretro-gambatte \
-        libretro-mgba \
-        libretro-snes9x \
-        libretro-nestopia \
-        libretro-genesis-plus-gx \
-        libretro-beetle-pce-fast \
-      ; do \
-        apt-get install -y --no-install-recommends "$core" 2>/dev/null || \
-          echo "Note: $core not available for this architecture, skipping."; \
-      done; \
-      mkdir -p /usr/lib/libretro; \
-      for dir in /usr/lib/*/libretro; do \
-        [ -d "$dir" ] || continue; \
-        for f in "$dir"/*.so; do \
-          [ -f "$f" ] && ln -sf "$f" /usr/lib/libretro/; \
-        done; \
-      done; \
-      apt-get clean; \
-      rm -rf /var/lib/apt/lists/* /tmp/*; \
-    fi
 
 # Copy ES-DE binary and resources from builder
 COPY --from=builder /out/usr/local/ /usr/local/

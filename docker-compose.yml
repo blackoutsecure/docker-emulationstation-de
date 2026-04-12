@@ -37,12 +37,7 @@ services:
     build:
       context: .
       target: default
-      args:
-        # RetroArch installation method (pick ONE):
-        #   1. Sidecar (recommended): Set 'false' here, use --profile sidecar
-        #      Allows independent RetroArch updates without rebuilding ES-DE.
-        #   2. Baked-in: Set 'true' here for a self-contained single image.
-        INSTALL_RETROARCH: 'false'
+      args: {}
     image: docker.io/blackoutsecure/emulationstation-de:latest
     container_name: emulationstation
     environment:
@@ -88,8 +83,7 @@ services:
     build:
       context: .
       target: selkies
-      args:
-        INSTALL_RETROARCH: 'false'
+      args: {}
     image: docker.io/blackoutsecure/emulationstation-de:latest-selkies
     container_name: emulationstation-selkies
     environment:
@@ -167,7 +161,6 @@ services:
   #   docker compose --profile sidecar --profile default up -d
   #
   # Both the 'default' and 'selkies' profiles can use this sidecar.
-  # Set INSTALL_RETROARCH=false on the ES-DE service when using sidecar.
   esde-emulator-provider:
     profiles: [sidecar]
     build:

@@ -517,10 +517,8 @@ fi
 #
 # Supported RetroArch: https://docs.linuxserver.io/images/docker-retroarch/
 #
-# Emulators can be provided in three ways:
-#   1. Sidecar volume at /opt/emulators/<name> (esde-emulator-provider) — recommended
-#   2. INSTALL_RETROARCH=true build arg (baked into image)
-#   3. Runtime apt install (not persistent)
+# Emulators are provided via the sidecar volume at /opt/emulators/<name>
+# (esde-emulator-provider).  Start with --profile sidecar.
 
 _emulators_home="/opt/emulators"
 _esde_emuwrap="/usr/local/bin/esde-emuwrap"
