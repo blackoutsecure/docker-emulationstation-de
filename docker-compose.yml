@@ -23,7 +23,7 @@ x-common: &common
     - emulationstation-config:/config
     - emulationstation-roms:/roms
     - emulationstation-bios:/bios
-    - esde-emulators:/opt/emulators    # Sidecar-provisioned emulators (empty if sidecar unused)
+    - emulationstation-emulators:/emulators    # Sidecar-provisioned emulators (empty if sidecar unused)
   devices:
     - /dev/dri:/dev/dri
 
@@ -147,7 +147,7 @@ services:
 
   # ── Emulator Sidecar (init-container pattern) ─────────────────────
   # Provisions emulator binaries (RetroArch + libretro cores by default)
-  # onto a shared volume.  ES-DE mounts the volume at /opt/emulators and
+  # onto a shared volume.  ES-DE mounts the volume at /emulators and
   # calls emulators via esde-emuwrap, which resolves the emulator from
   # its symlink name and sets the correct library paths.
   #
@@ -176,11 +176,11 @@ services:
     image: docker.io/blackoutsecure/esde-emulator-provider:latest
     container_name: esde-emulator-provider
     volumes:
-      - esde-emulators:/export
+      - emulationstation-emulators:/export
     restart: 'no'  # Run once, provision, exit
 
 volumes:
   emulationstation-config:
   emulationstation-roms:
   emulationstation-bios:
-  esde-emulators:            # Shared volume for sidecar-provisioned emulators
+  emulationstation-emulators:   # Shared volume for sidecar-provisioned emulators

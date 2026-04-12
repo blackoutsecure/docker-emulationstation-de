@@ -4,7 +4,7 @@
 # ES-DE launches emulators by name (e.g., retroarch, ppsspp, dolphin-emu).
 # This script is symlinked as the emulator name on PATH.  It resolves the
 # emulator from argv[0] (the symlink name), finds the sidecar-provisioned
-# binary under /opt/emulators/<name>/, sets LD_LIBRARY_PATH to isolate
+# binary under /emulators/<name>/, sets LD_LIBRARY_PATH to isolate
 # bundled libraries, then exec's the real binary.
 #
 # Supported emulators (any that ES-DE can launch):
@@ -12,7 +12,7 @@
 #   - (extensible to PPSSPP, Dolphin, PCSX2, Flycast, melonDS, etc.)
 set -euo pipefail
 
-EMULATORS_HOME="${ESDE_EMULATORS_HOME:-/opt/emulators}"
+EMULATORS_HOME="${ESDE_EMULATORS_HOME:-/emulators}"
 
 # Resolve emulator name from how we were invoked (symlink name)
 EMU_NAME="$(basename "$0")"
@@ -45,7 +45,7 @@ if [[ ! -x "${EMU_BIN}" ]]; then
     fi
   else
     echo "${TAG} Emulators volume ${EMULATORS_HOME} does not exist." >&2
-    echo "${TAG} Ensure the esde-emulators volume is mounted." >&2
+    echo "${TAG} Ensure the emulationstation-emulators volume is mounted." >&2
   fi
   echo "${TAG} " >&2
   echo "${TAG} To fix, start the sidecar:" >&2

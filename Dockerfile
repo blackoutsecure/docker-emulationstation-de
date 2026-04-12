@@ -330,7 +330,7 @@ COPY /root/etc/s6-overlay/s6-rc.d/svc-local-input /etc/s6-overlay/s6-rc.d/svc-lo
 COPY /root/usr/local/bin/esde-audio /usr/local/bin/esde-audio
 COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-audio /etc/s6-overlay/s6-rc.d/svc-esde-audio
 
-# Generic emulator wrapper (calls emulators from /opt/emulators/<name>/ with correct LD_LIBRARY_PATH)
+# Generic emulator wrapper (calls emulators from /emulators/<name>/ with correct LD_LIBRARY_PATH)
 COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
 
 # Auto-generate SDL2 GameController mappings for unmapped joysticks
@@ -401,7 +401,7 @@ VOLUME /config
 # We only add libretro cores on top, then run esde-provision to copy
 # the binary, cores, and required shared libraries to a shared volume.
 #
-# The ES-DE container mounts the volume at /opt/emulators and calls
+# The ES-DE container mounts the volume at /emulators and calls
 # emulators via esde-emuwrap (resolves emulator from symlink name,
 # sets LD_LIBRARY_PATH, exec's the real binary).
 #

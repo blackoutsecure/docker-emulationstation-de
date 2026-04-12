@@ -444,9 +444,9 @@ docker compose --profile default --profile sidecar up -d
 ```
 
 How it works:
-1. `esde-emulator-provider` is based on `lscr.io/linuxserver/retroarch:latest` with libretro cores added. It copies the RetroArch binary, cores, and shared libraries to a volume at `/opt/emulators/retroarch/`, then exits
-2. ES-DE container mounts the same volume at `/opt/emulators`
-3. On startup, ES-DE scans `/opt/emulators/*/` and symlinks `esde-emuwrap` as each emulator name on PATH
+1. `esde-emulator-provider` is based on `lscr.io/linuxserver/retroarch:latest` with libretro cores added. It copies the RetroArch binary, cores, and shared libraries to a volume at `/emulators/retroarch/`, then exits
+2. ES-DE container mounts the same volume at `/emulators`
+3. On startup, ES-DE scans `/emulators/*/` and symlinks `esde-emuwrap` as each emulator name on PATH
 4. `esde-emuwrap` resolves the emulator from its symlink name (`$0`), sets `LD_LIBRARY_PATH` to the sidecar's bundled libraries, then exec's the real binary
 
 **Update RetroArch only** (pulls latest linuxserver image):
@@ -484,7 +484,7 @@ docker compose --profile default up -d emulationstation
 
 **Startup logs when sidecar hasn't run:**
 ```
-[svc-esde] Note: /opt/emulators volume is mounted but empty.
+[svc-esde] Note: /emulators volume is mounted but empty.
 [svc-esde]   The esde-emulator-provider sidecar may not have run yet.
 [svc-esde]   Start it: docker compose --profile sidecar up esde-emulator-provider
 [svc-esde] ================================================
@@ -495,8 +495,8 @@ docker compose --profile default up -d emulationstation
 **Game launch error when emulator wrapper can't find the binary:**
 ```
 [esde-emuwrap:retroarch] ================================================
-[esde-emuwrap:retroarch] ERROR: retroarch not found at /opt/emulators/retroarch/bin/retroarch
-[esde-emuwrap:retroarch] Directory /opt/emulators/retroarch exists but appears empty.
+[esde-emuwrap:retroarch] ERROR: retroarch not found at /emulators/retroarch/bin/retroarch
+[esde-emuwrap:retroarch] Directory /emulators/retroarch exists but appears empty.
 [esde-emuwrap:retroarch] The emulator-provider sidecar has not run yet.
 [esde-emuwrap:retroarch]
 [esde-emuwrap:retroarch] To fix, start the sidecar:
@@ -517,7 +517,7 @@ The sidecar pattern is generic. ES-DE supports [many emulators](https://gitlab.c
 | Flycast | `%EMULATOR_FLYCAST%` | Dreamcast |
 | melonDS | `%EMULATOR_MELONDS%` | Nintendo DS |
 
-Any emulator can be provisioned the same way: `esde-provision` copies the binary + libraries to `/opt/emulators/<name>/`, and `esde-emuwrap` on the ES-DE side resolves the emulator from its symlink name and handles `LD_LIBRARY_PATH` isolation automatically.
+Any emulator can be provisioned the same way: `esde-provision` copies the binary + libraries to `/emulators/<name>/`, and `esde-emuwrap` on the ES-DE side resolves the emulator from its symlink name and handles `LD_LIBRARY_PATH` isolation automatically.
 
 ---
 

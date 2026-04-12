@@ -551,10 +551,10 @@ fi
 #
 # Supported RetroArch: https://docs.linuxserver.io/images/docker-retroarch/
 #
-# Emulators are provided via the sidecar volume at /opt/emulators/<name>
+# Emulators are provided via the sidecar volume at /emulators/<name>
 # (esde-emulator-provider).  Start with --profile sidecar.
 
-_emulators_home="/opt/emulators"
+_emulators_home="/emulators"
 _esde_emuwrap="/usr/local/bin/esde-emuwrap"
 
 # Scan for sidecar-provisioned emulators and set up PATH integration
@@ -577,7 +577,7 @@ if [[ -d "${_emulators_home}" ]]; then
 
   # Handle empty volume (sidecar hasn't run) — noted in summary only
   if ! ${_found_any} && [[ "$(find "${_emulators_home}" -maxdepth 0 -empty 2>/dev/null)" ]]; then
-    _summary_emulator="Emulator: /opt/emulators empty (sidecar not run)"
+    _summary_emulator="Emulator: /emulators empty (sidecar not run)"
   fi
 fi
 
