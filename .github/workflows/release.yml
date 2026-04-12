@@ -213,27 +213,27 @@ jobs:
     steps:
       - name: Create release notes file
         run: |
-          cat > /tmp/release_notes.md << 'EOF'
-          ## ES-DE Container Release
-
-          - Image: `${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}`
-          - Tag: `${{ needs.resolve-release.outputs.release_tag }}`
-          - Selkies Tag: `${{ needs.resolve-release.outputs.release_tag }}-selkies`
-          - ES-DE upstream ref: `${{ needs.resolve-release.outputs.esde_build_ref }}`
-          - Built from: `${{ github.sha }}`
-
-          ### Pull (Local Display)
-
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}
-          ```
-
-          ### Pull (Selkies WebRTC)
-
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-selkies
-          ```
-          EOF
+          printf '%s\n' \
+            '## ES-DE Container Release' \
+            '' \
+            '- Image: `${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}`' \
+            '- Tag: `${{ needs.resolve-release.outputs.release_tag }}`' \
+            '- Selkies Tag: `${{ needs.resolve-release.outputs.release_tag }}-selkies`' \
+            '- ES-DE upstream ref: `${{ needs.resolve-release.outputs.esde_build_ref }}`' \
+            '- Built from: `${{ github.sha }}`' \
+            '' \
+            '### Pull (Local Display)' \
+            '' \
+            '```bash' \
+            'docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}' \
+            '```' \
+            '' \
+            '### Pull (Selkies WebRTC)' \
+            '' \
+            '```bash' \
+            'docker pull ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.resolve-release.outputs.release_tag }}-selkies' \
+            '```' \
+            > /tmp/release_notes.md
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

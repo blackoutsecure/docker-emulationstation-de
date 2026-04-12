@@ -439,14 +439,14 @@ else
         chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_settings_home}/ES-DE" 2>/dev/null || true
         _esde_settings="${_esde_settings_dir}/es_settings.xml"
         if [[ ! -f "${_esde_settings}" ]]; then
-          cat > "${_esde_settings}" <<XMLEOF
-<?xml version="1.0"?>
-<string name="AudioDevice" value="${_sink_description}" />
-<int name="SystemVolume" value="100" />
-<bool name="NavigationSoundsEnabled" value="true" />
-<int name="SoundVolumeNavigation" value="70" />
-<int name="SoundVolumeVideos" value="80" />
-XMLEOF
+          printf '%s\n' \
+            '<?xml version="1.0"?>' \
+            "<string name=\"AudioDevice\" value=\"${_sink_description}\" />" \
+            '<int name="SystemVolume" value="100" />' \
+            '<bool name="NavigationSoundsEnabled" value="true" />' \
+            '<int name="SoundVolumeNavigation" value="70" />' \
+            '<int name="SoundVolumeVideos" value="80" />' \
+            > "${_esde_settings}"
           chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_settings}"
           _summary_esde_audio="ES-DE: seeded settings (device=\"${_sink_description}\" vol=100)"
         fi
