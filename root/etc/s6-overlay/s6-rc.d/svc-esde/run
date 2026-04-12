@@ -223,6 +223,29 @@ if command -v pulseaudio >/dev/null 2>&1; then
       _summary_sink="Sink: NONE DETECTED"
     fi
     [[ -n "${_sink_names}" ]] && _summary_sink="${_summary_sink} | Available: ${_sink_names}"
+
+    # --- Unmute and set volume on the active sink ---
+    # PulseAudio sinks often default to muted or 0% volume, especially for
+    # HDMI outputs. This is the most common cause of "no audio".
+    _active_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
+    if [[ -n "${_active_sink}" ]]; then
+      s6-setuidgid "${APP_USER:-abc}" pactl set-sink-mute "${_active_sink}" 0 2>/dev/null || true
+      s6-setuidgid "${APP_USER:-abc}" pactl set-sink-volume "${_active_sink}" 100% 2>/dev/null || true
+      # Verify volume/mute status
+      _vol="$(s6-setuidgid "${APP_USER:-abc}" pactl get-sink-volume "${_active_sink}" 2>/dev/null | grep -oP '[0-9]+%' | head -1)" || true
+      _mute="$(s6-setuidgid "${APP_USER:-abc}" pactl get-sink-mute "${_active_sink}" 2>/dev/null | awk '{print $2}')" || true
+      _summary_sink="${_summary_sink} | Vol: ${_vol:-?} Mute: ${_mute:-?}"
+    fi
+
+    # Unmute ALSA mixer controls for all sound cards.
+    # HDMI audio on RPi vc4 can be muted at ALSA level independently of PulseAudio.
+    if command -v amixer >/dev/null 2>&1 && [[ -r /proc/asound/cards ]]; then
+      while read -r _cnum; do
+        [[ "${_cnum}" =~ ^[0-9]+$ ]] || continue
+        amixer -c "${_cnum}" sset 'PCM' 100% unmute 2>/dev/null || true
+        amixer -c "${_cnum}" sset 'Master' 100% unmute 2>/dev/null || true
+      done < <(grep -oP '^\s*\K[0-9]+' /proc/asound/cards 2>/dev/null)
+    fi
   fi
 else
   _summary_sink="Sink: PulseAudio NOT INSTALLED"
@@ -230,6 +253,130 @@ fi
 
 if [[ ! -e /dev/dri/renderD128 && ! -e /dev/dri/card0 ]]; then
   _summary_audio="${_summary_audio} | WARNING: no /dev/dri GPU"
+fi
+
+# --- Read ES-DE audio settings from es_settings.xml and wire to PulseAudio ---
+# ES-DE stores audio preferences in es_settings.xml after its first run.
+# Key settings:
+#   SystemVolume          (0-100)  — maps to PulseAudio master volume on Linux
+#   AudioDevice           (string) — SDL2 device description, e.g. "Built-in Audio Digital Stereo (HDMI)"
+#   SoundVolumeNavigation (0-100)  — internal to ES-DE
+#   SoundVolumeVideos     (0-100)  — internal to ES-DE
+# We read these and match AudioDevice to a PulseAudio sink, then set volume/unmute
+# so the audio subsystem is ready before ES-DE launches.
+_esde_settings=""
+_esde_settings_home="${ESDE_HOME:-/config}"
+for _settings_candidate in \
+  "${_esde_settings_home}/ES-DE/settings/es_settings.xml" \
+  "${_esde_settings_home}/.emulationstation-de/settings/es_settings.xml" \
+  "${_esde_settings_home}/settings/es_settings.xml"; do
+  if [[ -f "${_settings_candidate}" ]]; then
+    _esde_settings="${_settings_candidate}"
+    break
+  fi
+done
+
+_summary_esde_audio=""
+if [[ -n "${_esde_settings}" ]]; then
+  # Parse SystemVolume (integer 0-100)
+  _esde_vol="$(grep -oP 'name="SystemVolume"\s+value="\K[^"]+' "${_esde_settings}" 2>/dev/null)" || true
+  # Parse AudioDevice (SDL2 device description string)
+  _esde_audio_dev="$(grep -oP 'name="AudioDevice"\s+value="\K[^"]+' "${_esde_settings}" 2>/dev/null)" || true
+
+  _summary_esde_audio="ES-DE: vol=${_esde_vol:-default} device=\"${_esde_audio_dev:-auto}\""
+
+  # Map ES-DE's AudioDevice (SDL2 description) to a PulseAudio sink name.
+  # SDL2's PulseAudio driver lists sinks by their description, not their name.
+  # We query `pactl list sinks` and match the Description field.
+  if [[ -n "${_esde_audio_dev}" ]] && s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    _matched_sink=""
+    while IFS=$'\t' read -r _sink_name _sink_desc; do
+      if [[ "${_sink_desc}" == "${_esde_audio_dev}" ]]; then
+        _matched_sink="${_sink_name}"
+        break
+      fi
+    done < <(s6-setuidgid "${APP_USER:-abc}" pactl list sinks 2>/dev/null | awk '
+      /^\tName:/ { name=$2 }
+      /^\tDescription:/ { sub(/^\tDescription: /, ""); print name "\t" $0 }
+    ')
+
+    if [[ -n "${_matched_sink}" ]]; then
+      s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${_matched_sink}" 2>/dev/null || true
+      _summary_esde_audio="${_summary_esde_audio} -> sink=${_matched_sink}"
+    else
+      _summary_esde_audio="${_summary_esde_audio} (device not found in PA sinks)"
+    fi
+  fi
+
+  # Apply ES-DE's SystemVolume to the PulseAudio default sink.
+  # ES-DE does this itself via SDL on startup, but ensuring it's pre-set avoids
+  # a window where audio plays at 0% or muted before ES-DE finishes initializing.
+  if [[ -n "${_esde_vol}" && "${_esde_vol}" =~ ^[0-9]+$ ]] && \
+     s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    _active_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
+    if [[ -n "${_active_sink}" ]]; then
+      s6-setuidgid "${APP_USER:-abc}" pactl set-sink-mute "${_active_sink}" 0 2>/dev/null || true
+      s6-setuidgid "${APP_USER:-abc}" pactl set-sink-volume "${_active_sink}" "${_esde_vol}%" 2>/dev/null || true
+    fi
+  fi
+else
+  # First boot — no es_settings.xml yet. ES-DE will create it with defaults.
+  # Seed a minimal settings file with the correct AudioDevice so ES-DE picks
+  # the right output on first launch instead of potentially choosing a dummy sink.
+  if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+    _active_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
+    if [[ -n "${_active_sink}" ]]; then
+      # Get the PulseAudio sink description (this is what SDL2 uses as the device name)
+      _sink_description=""
+      _sink_description="$(s6-setuidgid "${APP_USER:-abc}" pactl list sinks 2>/dev/null | awk -v sink="${_active_sink}" '
+        /^\tName:/ { found=($2 == sink) }
+        found && /^\tDescription:/ { sub(/^\tDescription: /, ""); print; exit }
+      ')" || true
+
+      if [[ -n "${_sink_description}" ]]; then
+        # Create ES-DE settings directory and seed audio config
+        _esde_settings_dir="${_esde_settings_home}/ES-DE/settings"
+        mkdir -p "${_esde_settings_dir}"
+        chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_settings_home}/ES-DE" 2>/dev/null || true
+        _esde_settings="${_esde_settings_dir}/es_settings.xml"
+        if [[ ! -f "${_esde_settings}" ]]; then
+          cat > "${_esde_settings}" <<XMLEOF
+<?xml version="1.0"?>
+<string name="AudioDevice" value="${_sink_description}" />
+<int name="SystemVolume" value="100" />
+<bool name="NavigationSoundsEnabled" value="true" />
+<int name="SoundVolumeNavigation" value="70" />
+<int name="SoundVolumeVideos" value="80" />
+XMLEOF
+          chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_settings}"
+          _summary_esde_audio="ES-DE: seeded settings (device=\"${_sink_description}\" vol=100)"
+        fi
+      fi
+    fi
+  fi
+  [[ -z "${_summary_esde_audio}" ]] && _summary_esde_audio="ES-DE: no settings file (first boot)"
+fi
+
+# --- HDMI audio validation ---
+# On RPi, even when PulseAudio is unmuted and volume is set, HDMI audio requires
+# the sink to actually be in RUNNING or IDLE state. Use aplay to send a short
+# silence burst which forces the ALSA device open and triggers ELD/EDID audio
+# handshake. Without this, some HDMI receivers won't start their audio decoder.
+if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+  _active_sink="$(s6-setuidgid "${APP_USER:-abc}" pactl get-default-sink 2>/dev/null)" || true
+  if [[ -n "${_active_sink}" && "${_active_sink}" == *"hdmi"* ]]; then
+    # Extract ALSA card/device from the sink name for aplay
+    # Sink names like "alsa_output.1.hdmi-stereo" -> card 1
+    _alsa_card="$(echo "${_active_sink}" | grep -oP 'alsa_output\.\K[0-9]+')" || true
+    if [[ -n "${_alsa_card}" ]] && command -v speaker-test >/dev/null 2>&1; then
+      # Send 1 second of silence via speaker-test to wake the HDMI audio link
+      timeout 2 speaker-test -D "plughw:${_alsa_card},0" -t sine -f 0 -l 1 >/dev/null 2>&1 || true
+    elif [[ -n "${_alsa_card}" ]] && command -v aplay >/dev/null 2>&1; then
+      # Fallback: send a tiny WAV of silence
+      dd if=/dev/zero bs=1 count=8000 2>/dev/null | \
+        aplay -D "plughw:${_alsa_card},0" -r 8000 -f S16_LE -c 2 -q 2>/dev/null || true
+    fi
+  fi
 fi
 
 # --- Gamepad / input device diagnostics ---
@@ -463,9 +610,13 @@ emit_startup_summary() {
   echo "[svc-esde] ${_summary_sink}"
   echo "[svc-esde] ${_summary_input}"
   echo "[svc-esde] ${_summary_emulator}"
+  echo "[svc-esde] ${_summary_esde_audio}"
   echo "[svc-esde] Video: ${_video_driver} (ESDE_VIDEO_DRIVER=${ESDE_VIDEO_DRIVER:-<unset>})"
   echo "[svc-esde] Tailing: es_log.txt, Xorg.log, retroarch.log"
   echo "[svc-esde] ES-DE is idle at menu — logs appear on activity (input config, game launch, errors)"
+  if [[ "${_summary_sink}" == *"hdmi"* && "${_is_rpi}" == "true" ]]; then
+    echo "[svc-esde] No HDMI audio? Set Balena device var BALENA_HOST_CONFIG_hdmi_drive=2"
+  fi
   echo "[svc-esde] ═══════════════════════════════════════════════"
   echo ""
 }
@@ -587,6 +738,26 @@ if ! ${_is_rpi} && [[ -r /proc/asound/cards ]]; then
   fi
 fi
 ${_is_rpi} && _summary_audio="${_summary_audio} | RPi detected"
+
+# On RPi, if HDMI negotiates DVI mode (no audio), PulseAudio will have the sink
+# but audio won't play. Check EDID/status via DRM and note in summary.
+if ${_is_rpi}; then
+  _hdmi_audio_hint=""
+  for _conn in /sys/class/drm/card*-HDMI-A-*/status; do
+    [[ -f "${_conn}" ]] || continue
+    _conn_status="$(cat "${_conn}" 2>/dev/null)" || true
+    _conn_name="$(basename "$(dirname "${_conn}")")"
+    if [[ "${_conn_status}" == "connected" ]]; then
+      _hdmi_audio_hint="${_hdmi_audio_hint:+${_hdmi_audio_hint}, }${_conn_name}=connected"
+    fi
+  done
+  if [[ -n "${_hdmi_audio_hint}" ]]; then
+    _summary_audio="${_summary_audio} | DRM: ${_hdmi_audio_hint}"
+  fi
+  # If no audio after unmuting, the HDMI port may be in DVI mode (no audio channel).
+  # Fix on Balena: set device variable BALENA_HOST_CONFIG_hdmi_drive=2
+  # Fix on Raspberry Pi OS: add hdmi_drive=2 to /boot/config.txt
+fi
 
 _video_driver="${ESDE_VIDEO_DRIVER:-auto}"
 
