@@ -33,7 +33,10 @@ if ! ${pa_ok}; then
 fi
 echo "${TAG} PulseAudio is running."
 
-# ── Load USB audio module if needed ───────────────────────────────
+# ── Load audio kernel modules ─────────────────────────────────────
+# RPi 3.5mm analog output needs snd_bcm2835 (not loaded by default with vc4 driver)
+modprobe snd_bcm2835 2>/dev/null || true
+
 if [[ -d /dev/bus/usb ]]; then
   modprobe snd-usb-audio 2>/dev/null || true
   # Retrigger udev for USB sound devices so PulseAudio can discover them

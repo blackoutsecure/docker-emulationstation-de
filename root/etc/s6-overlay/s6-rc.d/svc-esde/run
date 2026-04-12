@@ -84,12 +84,20 @@ fi
 # Load the USB audio kernel module if available. Without it, USB sound cards
 # will not appear in /proc/asound/cards even when /dev/bus/usb is passed through.
 if [[ -d /dev/bus/usb ]]; then
-  if modprobe snd-usb-audio 2>/dev/null; then
-    echo "[svc-esde] Loaded snd-usb-audio kernel module."
-  else
-    echo "[svc-esde] Note: Could not load snd-usb-audio module (may already be loaded, or host kernel lacks it)." >&2
-  fi
+  modprobe snd-usb-audio 2>/dev/null || true
 fi
+
+# Load the bcm2835 audio module for Raspberry Pi 3.5mm analog output.
+# On modern RPi kernels with vc4, this module is not loaded by default
+# because the vc4 HDMI driver handles digital audio on its own.
+# Without this module, the 3.5mm headphone jack will be invisible to ALSA.
+modprobe snd_bcm2835 2>/dev/null || true
+
+# --- Status summary variables (collected during setup, printed after ES-DE starts) ---
+_summary_audio=""
+_summary_sink=""
+_summary_input=""
+_summary_emulator=""
 
 # Start udevd early so PulseAudio's module-udev-detect can discover ALSA cards,
 # and Xorg can later discover input devices.
@@ -118,21 +126,15 @@ fi
 
 # 1. Detect ALSA hardware (sound cards visible to the kernel)
 if [[ -d /dev/snd ]]; then
-  snd_devices="$(ls /dev/snd/ 2>/dev/null)" || true
-  if [[ -n "${snd_devices}" ]]; then
-    echo "[svc-esde] Audio hardware detected in /dev/snd: $(echo "${snd_devices}" | tr '\n' ' ')"
-  else
-    echo "[svc-esde] Warning: /dev/snd exists but contains no device nodes." >&2
-  fi
   if [[ -r /proc/asound/cards ]]; then
-    while IFS= read -r line; do
-      echo "[svc-esde]   ALSA card: ${line}"
-    done < /proc/asound/cards
+    # Build compact card list for summary
+    _alsa_cards="$(grep -E '^\s*[0-9]' /proc/asound/cards | sed 's/.*\]: //' | tr '\n' ', ' | sed 's/, $//')" || true
+    _summary_audio="ALSA: ${_alsa_cards:-none}"
+  else
+    _summary_audio="ALSA: /dev/snd present, no cards"
   fi
 else
-  echo "[svc-esde] Warning: /dev/snd not found. No sound devices available." >&2
-  echo "[svc-esde]   For USB audio: pass --device /dev/snd:/dev/snd or use privileged mode." >&2
-  echo "[svc-esde]   Ensure the host kernel has the snd-usb-audio module loaded (modprobe snd-usb-audio)." >&2
+  _summary_audio="ALSA: WARNING /dev/snd not found"
 fi
 
 # Check if USB audio devices are expected but missing.
@@ -163,24 +165,9 @@ if [[ -d /dev/bus/usb ]]; then
   done
 
   if ${_usb_audio_found}; then
-    echo "[svc-esde] USB audio card(s) detected in ALSA."
+    _summary_audio="${_summary_audio} | USB audio: yes"
   else
-    echo "[svc-esde] Note: /dev/bus/usb is available but no USB audio cards found in ALSA after 15s."
-    echo "[svc-esde]   If you have a USB audio device:"
-    echo "[svc-esde]     1. On the HOST, run: sudo modprobe snd-usb-audio"
-    echo "[svc-esde]     2. On the HOST, verify: cat /proc/asound/cards  (should list your device)"
-    echo "[svc-esde]     3. Ensure the device is plugged in and powered"
-    echo "[svc-esde]     4. Restart the container after steps 1-3"
-    # Show visible USB devices for diagnostics
-    if [[ -d /sys/bus/usb/devices ]]; then
-      echo "[svc-esde]   USB devices visible to the container:"
-      for _uprod in /sys/bus/usb/devices/*/product; do
-        [[ -r "${_uprod}" ]] || continue
-        _mfr="$(cat "$(dirname "${_uprod}")/manufacturer" 2>/dev/null)" || true
-        _prd="$(cat "${_uprod}" 2>/dev/null)" || true
-        [[ -n "${_prd}" ]] && echo "[svc-esde]     ${_mfr:+${_mfr} }${_prd}"
-      done
-    fi
+    _summary_audio="${_summary_audio} | USB audio: not found (host needs: modprobe snd-usb-audio)"
   fi
 fi
 
@@ -195,14 +182,12 @@ if command -v pulseaudio >/dev/null 2>&1; then
   # USB audio devices can take several seconds to be discovered by
   # module-udev-detect.  Wait up to 20s for a hardware ALSA sink.
   if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
-    echo "[svc-esde] Waiting for PulseAudio to discover audio devices..."
     _hw_sink=""
     for _wait in $(seq 1 20); do
       sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
       # Priority: 1) USB audio  2) 3.5mm analog  3) any ALSA (usually HDMI)
       _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*usb' | head -1 | awk '{print $2}')" || true
       if [[ -z "${_hw_sink}" ]]; then
-        # 3.5mm analog on RPi appears as bcm2835*.analog or platform-*.analog
         _hw_sink="$(echo "${sink_list}" | grep -i 'alsa_output.*analog' | head -1 | awk '{print $2}')" || true
       fi
       if [[ -z "${_hw_sink}" ]]; then
@@ -214,39 +199,37 @@ if command -v pulseaudio >/dev/null 2>&1; then
       sleep 1
     done
 
-    # Log all discovered sinks for troubleshooting
+    # Collect sink info for summary
     sink_list="$(s6-setuidgid "${APP_USER:-abc}" pactl list short sinks 2>/dev/null)" || true
-    if [[ -n "${sink_list}" ]]; then
-      echo "[svc-esde] PulseAudio sinks available:"
-      while IFS= read -r sink_line; do
-        echo "[svc-esde]   ${sink_line}"
-      done <<< "${sink_list}"
-    else
-      echo "[svc-esde] Warning: PulseAudio running but no sinks detected." >&2
-    fi
+    _sink_names="$(echo "${sink_list}" | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')" || true
 
-    # Set explicit sink if LOCAL_AUDIO_SINK is defined, otherwise prefer hardware ALSA sink
+    # Set default sink
     if [[ -n "${LOCAL_AUDIO_SINK:-}" ]]; then
-      s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${LOCAL_AUDIO_SINK}" 2>/dev/null && \
-        echo "[svc-esde] PulseAudio default sink set to: ${LOCAL_AUDIO_SINK}" || \
-        echo "[svc-esde] Warning: Could not set LOCAL_AUDIO_SINK=${LOCAL_AUDIO_SINK}. Check sink names above." >&2
+      if s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${LOCAL_AUDIO_SINK}" 2>/dev/null; then
+        _summary_sink="Sink: ${LOCAL_AUDIO_SINK} (manual)"
+      else
+        _summary_sink="Sink: FAILED to set ${LOCAL_AUDIO_SINK}"
+      fi
     elif [[ -n "${_hw_sink}" ]]; then
       s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${_hw_sink}" 2>/dev/null || true
-      echo "[svc-esde] PulseAudio default sink set to hardware device: ${_hw_sink}"
+      _summary_sink="Sink: ${_hw_sink}"
     elif [[ -n "${sink_list}" ]]; then
       default_sink="$(echo "${sink_list}" | head -1 | awk '{print $2}')" || true
       if [[ -n "${default_sink:-}" ]]; then
         s6-setuidgid "${APP_USER:-abc}" pactl set-default-sink "${default_sink}" 2>/dev/null || true
-        echo "[svc-esde] PulseAudio auto-selected sink: ${default_sink}"
+        _summary_sink="Sink: ${default_sink} (auto)"
       fi
+    else
+      _summary_sink="Sink: NONE DETECTED"
     fi
+    [[ -n "${_sink_names}" ]] && _summary_sink="${_summary_sink} | Available: ${_sink_names}"
   fi
 else
-  echo "[svc-esde] Warning: PulseAudio not installed. Audio will not work." >&2
+  _summary_sink="Sink: PulseAudio NOT INSTALLED"
 fi
 
 if [[ ! -e /dev/dri/renderD128 && ! -e /dev/dri/card0 ]]; then
-  echo "[svc-esde] Warning: No /dev/dri render/card node detected. Hardware GL may be unavailable." >&2
+  _summary_audio="${_summary_audio} | WARNING: no /dev/dri GPU"
 fi
 
 # --- Gamepad / input device diagnostics ---
@@ -257,48 +240,30 @@ if [[ -d /dev/input ]]; then
   _ev_count="$(echo "${_ev_devs}" | grep -c . 2>/dev/null)" || _ev_count=0
   [[ -z "${_js_devs}" ]] && _js_count=0
   [[ -z "${_ev_devs}" ]] && _ev_count=0
-  echo "[svc-esde] Input devices: ${_ev_count} event nodes, ${_js_count} joystick nodes."
+  # Compact: list all gamepads
+  _gamepad_names=""
   for _js in /dev/input/js*; do
     [[ -e "${_js}" ]] || continue
     _js_base="$(basename "${_js}")"
     _js_name="$(cat "/sys/class/input/${_js_base}/device/name" 2>/dev/null)" || true
-    if [[ -n "${_js_name}" ]]; then
-      echo "[svc-esde]   Gamepad: ${_js_name} (${_js})"
-    fi
+    [[ -n "${_js_name}" ]] && _gamepad_names="${_gamepad_names:+${_gamepad_names}, }${_js_name}"
   done
+  _summary_input="Input: ${_ev_count} events, ${_js_count} joysticks"
+  [[ -n "${_gamepad_names}" ]] && _summary_input="${_summary_input} [${_gamepad_names}]"
   # Verify the app user can read at least one event device (required by SDL2)
-  _input_access_ok=false
   for _ev in /dev/input/event*; do
     [[ -e "${_ev}" ]] || continue
-    if s6-setuidgid "${APP_USER:-abc}" test -r "${_ev}" 2>/dev/null; then
-      _input_access_ok=true
-    else
-      echo "[svc-esde] Warning: ${APP_USER:-abc} cannot read ${_ev} (GID=$(stat -c '%g' "${_ev}" 2>/dev/null))." >&2
-      echo "[svc-esde]   Gamepads may not work. Check /dev/input permissions or run privileged." >&2
+    if ! s6-setuidgid "${APP_USER:-abc}" test -r "${_ev}" 2>/dev/null; then
+      _summary_input="${_summary_input} | WARNING: permission denied on ${_ev}"
     fi
     break
   done
-  if ${_input_access_ok}; then
-    echo "[svc-esde] Input device permissions OK for ${APP_USER:-abc}."
-  fi
-
-  # SDL2 GameController mapping diagnostics.
-  # ES-DE uses the SDL2 GameController API, which only recognises joysticks that
-  # have a mapping in SDL2's built-in gamecontrollerdb.  Generic / no-name USB
-  # joysticks (e.g. DragonRise) are often missing and will be invisible to ES-DE
-  # even though they appear under /dev/input.
+  # SDL2 GameController mapping note
   if [[ ${_js_count} -gt 0 ]]; then
-    echo "[svc-esde] Note: ES-DE uses the SDL2 GameController API."
-    echo "[svc-esde]   Only controllers with an SDL2 mapping will be usable."
-    echo "[svc-esde]   If a gamepad listed above is not detected by ES-DE, add a"
-    echo "[svc-esde]   custom mapping via the SDL_GAMECONTROLLERCONFIG env variable."
-    echo "[svc-esde]   Generate mappings: https://github.com/gabomdq/SDL_GameControllerDB"
+    _summary_input="${_summary_input} | DragonRise/generic pads need SDL_GAMECONTROLLERCONFIG"
   fi
-  echo "[svc-esde] Note: ES-DE does not log individual button/key press events."
-  echo "[svc-esde]   To debug input, run inside the container: evtest /dev/input/eventN"
 else
-  echo "[svc-esde] Warning: /dev/input not found. Gamepads and keyboards will not work." >&2
-  echo "[svc-esde]   Pass --device /dev/input:/dev/input or use privileged mode." >&2
+  _summary_input="Input: WARNING /dev/input not found"
 fi
 
 # --- Emulator backend detection ---
@@ -327,23 +292,16 @@ if [[ -d "${_emulators_home}" ]]; then
       # Symlink generic wrapper as the emulator name on PATH
       if [[ -x "${_esde_emuwrap}" ]]; then
         ln -sf "${_esde_emuwrap}" "/usr/local/bin/${_emu_name}"
-        echo "[svc-esde] Sidecar ${_emu_name} detected; linked via esde-emuwrap as /usr/local/bin/${_emu_name}"
       else
         ln -sf "${_emu_bin}" "/usr/local/bin/${_emu_name}"
-        echo "[svc-esde] Sidecar ${_emu_name} detected; linked binary to /usr/local/bin/${_emu_name}"
-      fi
-      if [[ -f "${_emu_dir}VERSION" ]]; then
-        echo "[svc-esde]   Version: $(cat "${_emu_dir}VERSION")"
       fi
       _found_any=true
     fi
   done
 
-  # Handle empty volume (sidecar hasn't run)
+  # Handle empty volume (sidecar hasn't run) — noted in summary only
   if ! ${_found_any} && [[ "$(find "${_emulators_home}" -maxdepth 0 -empty 2>/dev/null)" ]]; then
-    echo "[svc-esde] Note: /opt/emulators volume is mounted but empty." >&2
-    echo "[svc-esde]   The esde-emulator-provider sidecar may not have run yet." >&2
-    echo "[svc-esde]   Start it: docker compose --profile sidecar up esde-emulator-provider" >&2
+    _summary_emulator="Emulator: /opt/emulators empty (sidecar not run)"
   fi
 fi
 
@@ -360,7 +318,7 @@ if command -v retroarch >/dev/null 2>&1; then
     _ra_source="sidecar"
   fi
   _ra_ver="$(retroarch --version 2>&1 | head -1)" || _ra_ver="unknown"
-  echo "[svc-esde] RetroArch found (${_ra_source}): ${_ra_ver}"
+  _summary_emulator="Emulator: RetroArch (${_ra_source}) ${_ra_ver}"
   # Check for libretro cores
   _core_dirs=(/usr/lib/libretro /usr/lib/*/libretro "${_ra_sidecar}/cores" "${ESDE_HOME:-/config}/.config/retroarch/cores")
   _core_count=0
@@ -371,45 +329,20 @@ if command -v retroarch >/dev/null 2>&1; then
     fi
   done
   if [[ ${_core_count} -gt 0 ]]; then
-    echo "[svc-esde] Found ${_core_count} libretro core(s)."
-    # List available cores for diagnostics
+    _core_names=""
     for _cdir in "${_core_dirs[@]}"; do
       [[ -d "${_cdir}" ]] || continue
       for _core_file in "${_cdir}"/*.so; do
         [[ -f "${_core_file}" ]] || continue
-        echo "[svc-esde]   Core: $(basename "${_core_file}")"
+        _core_names="${_core_names:+${_core_names}, }$(basename "${_core_file}" .so)"
       done
     done
+    _summary_emulator="${_summary_emulator} | ${_core_count} cores: ${_core_names}"
   else
-    echo "[svc-esde] Warning: RetroArch is installed but no libretro cores found." >&2
-    echo "[svc-esde]   Games will fail to launch. Install cores via:" >&2
-    echo "[svc-esde]     apt install libretro-gambatte libretro-mgba libretro-snes9x ..." >&2
-    echo "[svc-esde]   Or use RetroArch: Main Menu > Online Updater > Core Downloader" >&2
+    _summary_emulator="${_summary_emulator} | WARNING: no libretro cores"
   fi
 else
-  echo "[svc-esde] ================================================" >&2
-  echo "[svc-esde] WARNING: RetroArch is NOT installed." >&2
-  echo "[svc-esde]   ES-DE is a frontend only — it needs RetroArch" >&2
-  echo "[svc-esde]   (or another emulator) to actually run games." >&2
-  echo "[svc-esde]   Game launches will fail with:" >&2
-  echo "[svc-esde]     Error: %EMULATOR_RETROARCH% ... not found" >&2
-  echo "[svc-esde] " >&2
-  echo "[svc-esde]   Option 1 — Use the emulator sidecar (recommended):" >&2
-  echo "[svc-esde]     docker compose --profile sidecar --profile default up -d" >&2
-  echo "[svc-esde]     See: https://docs.linuxserver.io/images/docker-retroarch/" >&2
-  echo "[svc-esde] " >&2
-  echo "[svc-esde]   Option 2 — Build with RetroArch included:" >&2
-  echo "[svc-esde]     docker compose build --build-arg INSTALL_RETROARCH=true" >&2
-  echo "[svc-esde] " >&2
-  echo "[svc-esde]   Option 3 — Install at runtime (not persistent):" >&2
-  echo "[svc-esde]     docker exec -it emulationstation bash" >&2
-  echo "[svc-esde]     apt update && apt install -y retroarch libretro-gambatte" >&2
-  echo "[svc-esde] " >&2
-  echo "[svc-esde]   NOTE: linuxserver/docker-retroarch is a standalone" >&2
-  echo "[svc-esde]   streaming app — it CANNOT be used as a backend for" >&2
-  echo "[svc-esde]   ES-DE. RetroArch must be in THIS container's" >&2
-  echo "[svc-esde]   filesystem (via sidecar volume or direct install)." >&2
-  echo "[svc-esde] ================================================" >&2
+  _summary_emulator="Emulator: WARNING RetroArch NOT installed — games will fail"
 fi
 
 esde_home="${ESDE_HOME:-/config}"
@@ -428,13 +361,11 @@ fi
 if [[ -d /roms && ! -e "${esde_home}/ROMs" ]]; then
   ln -s /roms "${esde_home}/ROMs"
   chown -h "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}/ROMs"
-  echo "[svc-esde] Linked /roms -> ${esde_home}/ROMs"
 fi
 if [[ -d /bios && ! -e "${esde_home}/.emulationstation/bios" ]]; then
   mkdir -p "${esde_home}/.emulationstation"
   ln -s /bios "${esde_home}/.emulationstation/bios"
   chown -h "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}/.emulationstation" "${esde_home}/.emulationstation/bios"
-  echo "[svc-esde] Linked /bios -> ${esde_home}/.emulationstation/bios"
 fi
 
 # --- Seed bundled demo ROMs on first boot ---
@@ -447,10 +378,8 @@ if [[ -d /defaults/roms ]]; then
   chown "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_roms}" 2>/dev/null || true
   _rom_file_count="$(find "${_esde_roms}" -mindepth 1 -maxdepth 2 -type f \( -name '*.gb' -o -name '*.gbc' -o -name '*.nes' -o -name '*.sfc' -o -name '*.smc' -o -name '*.bin' -o -name '*.zip' -o -name '*.7z' \) 2>/dev/null | wc -l)"
   if [[ "${_rom_file_count}" -eq 0 ]]; then
-    echo "[svc-esde] No ROM files found in ${_esde_roms}; seeding bundled demo ROMs..."
     cp -rn /defaults/roms/* "${_esde_roms}/" 2>/dev/null || true
     chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" "${_esde_roms}/" 2>/dev/null || true
-    echo "[svc-esde] Bundled demo ROMs copied to ${_esde_roms}. Add your own ROMs to replace them."
   fi
 fi
 
@@ -463,11 +392,10 @@ _roms_dir="${esde_home}/ROMs"
 if [[ -d "${_roms_dir}" ]]; then
   _subdir_count="$(find "${_roms_dir}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
   if [[ "${_subdir_count}" -eq 0 ]]; then
-    echo "[svc-esde] ROM directory is empty; pre-creating system directories..."
     if s6-setuidgid "${APP_USER:-abc}" /usr/local/bin/es-de --create-system-dirs --home "${esde_home}" >/dev/null 2>&1; then
-      echo "[svc-esde] System directories created successfully."
+      true  # success, silent
     else
-      echo "[svc-esde] Warning: --create-system-dirs failed; ES-DE will prompt on first launch." >&2
+      true  # non-critical, ES-DE will prompt on first launch
     fi
   fi
 fi
@@ -500,12 +428,18 @@ start_log_tailers() {
   done
   # If no existing log file found, watch the standard path for creation
   esde_log="${esde_log:-${esde_log_candidates[0]}}"
-  echo "[svc-esde] Tailing ES-DE log: ${esde_log}"
+
+  # RetroArch log (primary emulator backend) — so game-launch output appears in docker logs
+  local ra_log="${esde_home}/.config/retroarch/logs/retroarch.log"
+  mkdir -p "$(dirname "${ra_log}")" 2>/dev/null || true
+  chown "${APP_USER:-abc}":"${APP_USER:-abc}" "$(dirname "${ra_log}")" 2>/dev/null || true
 
   # Use -n 0 to skip existing content and only show new lines from this session
   tail -n 0 -F "${esde_log}" 2>/dev/null | sed --unbuffered 's/^/[es-de] /' &
   _log_pids+=("$!")
   tail -n 0 -F "${xorg_log}" 2>/dev/null | sed --unbuffered 's/^/[Xorg] /' &
+  _log_pids+=("$!")
+  tail -n 0 -F "${ra_log}" 2>/dev/null | sed --unbuffered 's/^/[retroarch] /' &
   _log_pids+=("$!")
 }
 
@@ -513,13 +447,28 @@ cleanup_log_tailers() {
   for pid in "${_log_pids[@]}"; do
     kill "${pid}" 2>/dev/null || true
   done
-  # Also kill any tail children spawned in the pipelines
   jobs -p 2>/dev/null | xargs -r kill 2>/dev/null || true
 }
 trap cleanup_log_tailers EXIT
 
-echo "[svc-esde] Starting ES-DE with DISPLAY=${DISPLAY}, XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}, and home=${esde_home}"
-echo "[svc-esde] Launch target is local device graphics output; no web console or HTTP port is exposed by this image."
+# --- Delayed startup summary ---
+# Balena's log rate limiter suppresses rapid-fire output during setup.
+# By waiting a few seconds after ES-DE starts, the summary arrives after
+# the rate limiter window has passed and will always be visible.
+emit_startup_summary() {
+  sleep 8  # Wait for ES-DE's ~3.5s startup + rate limiter cooldown
+  echo ""
+  echo "[svc-esde] ═══════════════ STARTUP SUMMARY ═══════════════"
+  echo "[svc-esde] ${_summary_audio}"
+  echo "[svc-esde] ${_summary_sink}"
+  echo "[svc-esde] ${_summary_input}"
+  echo "[svc-esde] ${_summary_emulator}"
+  echo "[svc-esde] Video: ${_video_driver} (ESDE_VIDEO_DRIVER=${ESDE_VIDEO_DRIVER:-<unset>})"
+  echo "[svc-esde] Tailing: es_log.txt, Xorg.log, retroarch.log"
+  echo "[svc-esde] ES-DE is idle at menu — logs appear on activity (input config, game launch, errors)"
+  echo "[svc-esde] ═══════════════════════════════════════════════"
+  echo ""
+}
 
 # --- udev setup for input device discovery (keyboard, mouse, gamepad) ---
 # Non-balena base images do not auto-start udev; we must do it ourselves.
@@ -554,25 +503,22 @@ if [[ -n "${DBUS_SYSTEM_BUS_ADDRESS:-}" ]]; then
   # Extract path from unix:path=... format
   _configured_socket="${DBUS_SYSTEM_BUS_ADDRESS#unix:path=}"
   if _dbus_socket_alive "${_configured_socket}"; then
-    echo "[svc-esde] D-Bus system bus already available at ${_configured_socket}"
     _need_dbus=false
   else
-    echo "[svc-esde] DBUS_SYSTEM_BUS_ADDRESS is set but socket ${_configured_socket} is not responding; will start our own." >&2
+    echo "[svc-esde] D-Bus at ${_configured_socket} not responding; starting our own." >&2
     unset DBUS_SYSTEM_BUS_ADDRESS
   fi
 elif _dbus_socket_alive "${_dbus_socket}"; then
   export DBUS_SYSTEM_BUS_ADDRESS="unix:path=${_dbus_socket}"
-  echo "[svc-esde] D-Bus system bus found at ${_dbus_socket}"
   _need_dbus=false
 elif [[ -S "${_dbus_socket}" ]]; then
-  echo "[svc-esde] D-Bus socket exists at ${_dbus_socket} but is not responding; will start our own." >&2
+  echo "[svc-esde] D-Bus socket at ${_dbus_socket} not responding; starting our own." >&2
 fi
 
 if ${_need_dbus}; then
   if command -v dbus-daemon >/dev/null 2>&1; then
     if [[ ! -f /usr/share/dbus-1/system.conf ]]; then
-      echo "[svc-esde] Warning: /usr/share/dbus-1/system.conf not found. Install 'dbus' package." >&2
-      echo "[svc-esde]   Skipping dbus-daemon start; Xorg will log dbus-core errors (harmless but noisy)." >&2
+      echo "[svc-esde] Warning: dbus system.conf not found — Xorg will log dbus-core errors (harmless)." >&2
     else
       if command -v dbus-uuidgen >/dev/null 2>&1; then
         dbus-uuidgen --ensure 2>/dev/null || true
@@ -586,9 +532,9 @@ if ${_need_dbus}; then
       done
       if _dbus_socket_alive "${_dbus_socket}"; then
         export DBUS_SYSTEM_BUS_ADDRESS="unix:path=${_dbus_socket}"
-        echo "[svc-esde] Started dbus-daemon; system bus available."
+        echo "[svc-esde] D-Bus system bus available."
       else
-        echo "[svc-esde] Warning: dbus-daemon started but not responding after 5s." >&2
+        echo "[svc-esde] Warning: dbus-daemon not responding after 5s." >&2
       fi
     fi
   else
@@ -617,7 +563,6 @@ if [[ -r /proc/device-tree/model ]]; then
   _dt_model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)" || true
   if [[ "${_dt_model}" == *"Raspberry Pi"* ]]; then
     _is_rpi=true
-    echo "[svc-esde] Detected Raspberry Pi hardware: ${_dt_model}"
   fi
 fi
 # Method 2: sysfs DRM driver name
@@ -630,7 +575,6 @@ if ! ${_is_rpi}; then
       _drv_name="$(basename "$(readlink -f "${_drv_link}")")"
       if [[ "${_drv_name}" = "vc4-drm" || "${_drv_name}" = "vc4" ]]; then
         _is_rpi=true
-        echo "[svc-esde] Detected vc4 DRM driver on ${_card_name} (Raspberry Pi)."
         break
       fi
     fi
@@ -640,18 +584,14 @@ fi
 if ! ${_is_rpi} && [[ -r /proc/asound/cards ]]; then
   if grep -qi 'vc4hdmi\|vc4-hdmi' /proc/asound/cards 2>/dev/null; then
     _is_rpi=true
-    echo "[svc-esde] Detected Raspberry Pi via ALSA card names (vc4-hdmi)."
   fi
 fi
+${_is_rpi} && _summary_audio="${_summary_audio} | RPi detected"
 
 _video_driver="${ESDE_VIDEO_DRIVER:-auto}"
 
 # On Raspberry Pi, force X11 — KMSDRM cannot work with the split vc4+v3d DRM.
 if ${_is_rpi}; then
-  if [[ "${_video_driver}" = "kmsdrm" ]]; then
-    echo "[svc-esde] WARNING: ESDE_VIDEO_DRIVER=kmsdrm is set but Raspberry Pi vc4+v3d split-render"
-    echo "[svc-esde]   architecture does not support KMSDRM (EGL_BAD_MATCH). Overriding to x11."
-  fi
   _video_driver="x11"
 fi
 
@@ -662,32 +602,19 @@ if [[ "${_video_driver}" = "auto" ]]; then
     _video_driver="kmsdrm"
   fi
 fi
-echo "[svc-esde] Video driver selection: ESDE_VIDEO_DRIVER=${ESDE_VIDEO_DRIVER:-<unset>}, resolved to '${_video_driver}'"
+echo "[svc-esde] Video driver: ${_video_driver}"
 
 if [[ "${_video_driver}" = "kmsdrm" ]]; then
-  echo "[svc-esde] Using KMSDRM video driver (direct to display, no Xorg)."
   export SDL_VIDEODRIVER=kmsdrm
-
-  # Force SDL2 to use EGL/GLES instead of desktop GL.
-  # Required for GPUs that only expose GLES (e.g. Raspberry Pi V3D, Mali).
   export SDL_OPENGL_ES_DRIVER=1
-
-  # Prevent SDL2 from falling back to X11 or being confused by X11 env vars.
   unset DISPLAY 2>/dev/null || true
   unset XAUTHORITY 2>/dev/null || true
 
-  # Log DRM devices for diagnostics
-  if [[ -d /dev/dri ]]; then
-    echo "[svc-esde] DRM devices: $(ls /dev/dri/ 2>/dev/null | tr '\n' ' ')"
-  else
+  if [[ ! -d /dev/dri ]]; then
     echo "[svc-esde] Error: /dev/dri not found. KMSDRM requires GPU passthrough." >&2
   fi
-
-  # KMSDRM needs direct VT access; ensure we have a usable VT.
-  # SDL2 will open /dev/tty and issue VT_* ioctls.
   if [[ ! -e /dev/tty0 ]]; then
-    echo "[svc-esde] Warning: /dev/tty0 not found. KMSDRM may fail without VT access." >&2
-    echo "[svc-esde]   Ensure the container runs with --privileged or has /dev/tty* access." >&2
+    echo "[svc-esde] Warning: /dev/tty0 not found — KMSDRM may fail without VT access." >&2
   fi
 
   # Raspberry Pi split-render detection was already handled above;
@@ -700,7 +627,7 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
   chown -R "${APP_USER:-abc}":"${APP_USER:-abc}" "${esde_home}" 2>/dev/null || true
 
   start_log_tailers
-  echo "[svc-esde] Launching ES-DE via KMSDRM as root (DRM master requires root/CAP_SYS_ADMIN)."
+  emit_startup_summary &
   # Temporarily disable errexit so the fallback to X11 can trigger on failure.
   set +eo pipefail
   /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
@@ -720,7 +647,6 @@ if [[ "${_video_driver}" = "kmsdrm" ]]; then
 fi
 
 if [[ "${_video_driver}" = "x11" || "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
-  echo "[svc-esde] Starting internal Xorg session via startx (as root for VT management)."
 
   # Clean stale X lock/socket files from a previous crash to prevent startx failure
   rm -f "/tmp/.X${display_num}-lock" 2>/dev/null || true
@@ -744,6 +670,7 @@ if [[ "${_video_driver}" = "x11" || "${ESDE_USE_INTERNAL_X:-0}" = "1" ]]; then
     startx_server_args+=( -verbose 3 )
   fi
   start_log_tailers
+  emit_startup_summary &
   # Xorg detailed output is already captured by the [Xorg] log tailer from the log file.
   # Filter startx output to only show non-Xorg messages (startx wrapper, xinit, errors).
   startx /usr/local/bin/esde-startx-session -- "${startx_server_args[@]}" 2>&1 \
@@ -758,6 +685,7 @@ if [[ ! -S /tmp/.X11-unix/X${DISPLAY#:} ]]; then
 fi
 
 start_log_tailers
+emit_startup_summary &
 if [[ -z ${LSIO_NON_ROOT_USER:-} ]]; then
   s6-setuidgid "${APP_USER}" /usr/local/bin/es-de --home "${esde_home}" "${extra_args[@]}" 2>&1 | sed --unbuffered 's/^/[es-de] /'
   exit ${PIPESTATUS[0]}
