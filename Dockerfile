@@ -114,6 +114,14 @@ RUN mkdir -p "${BUILD_OUTPUT_DIR}/defaults/roms/gb" && \
     curl -fsSL -o "${BUILD_OUTPUT_DIR}/defaults/roms/gb/Libbet and the Magic Floor.gb" \
       https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb
 
+# --- Download SDL2 GameController community database ---
+# Provides button mappings for ~3000 gamepads so SDL2 can recognise them.
+# Without this, generic USB joysticks (e.g. DragonRise) are invisible to
+# SDL2's GameController API and cannot be configured in ES-DE.
+# Source: https://github.com/gabomdq/SDL_GameControllerDB  License: zlib
+RUN curl -fsSL -o "${BUILD_OUTPUT_DIR}/usr/local/share/es-de/gamecontrollerdb.txt" \
+      https://raw.githubusercontent.com/gabomdq/SDL_GameControllerDB/master/gamecontrollerdb.txt
+
 # ============================================================================
 # Stage 2a — Runtime: Local display (default target)
 #   docker build --target default .
@@ -202,8 +210,8 @@ COPY --from=builder /out/defaults/roms/ /defaults/roms/
 
 COPY /root/usr/local/bin/esde-startx-session /usr/local/bin/esde-startx-session
 COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
+COPY /root/usr/local/bin/esde-gamepad-map /usr/local/bin/esde-gamepad-map
 COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
-COPY /root/defaults/roms/LICENSE-bundled-roms.txt /defaults/roms/LICENSE-bundled-roms.txt
 
 RUN set -eux; \
   echo "**** record build version ****"; \
@@ -214,7 +222,7 @@ RUN set -eux; \
   chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d; \
   chmod 755 /etc/s6-overlay/s6-rc.d/user/contents.d; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde/type /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d/init-services /etc/s6-overlay/s6-rc.d/user/contents.d/svc-esde; \
-  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde/run /usr/local/bin/esde-startx-session /usr/local/bin/esde-emuwrap
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde/run /usr/local/bin/esde-startx-session /usr/local/bin/esde-emuwrap /usr/local/bin/esde-gamepad-map
 
 VOLUME /config
 
@@ -301,9 +309,6 @@ RUN echo "**** install ES-DE runtime dependencies ****" && \
 COPY --from=builder /out/usr/local/ /usr/local/
 COPY --from=builder /out/defaults/roms/ /defaults/roms/
 
-# Copy bundled ROM license
-COPY /root/defaults/roms/LICENSE-bundled-roms.txt /defaults/roms/LICENSE-bundled-roms.txt
-
 # Selkies autostart — the command Openbox runs inside the WebRTC session
 COPY /root/defaults/autostart /defaults/autostart
 
@@ -328,6 +333,9 @@ COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-audio /etc/s6-overlay/s6-rc.d/svc-esd
 # Generic emulator wrapper (calls emulators from /opt/emulators/<name>/ with correct LD_LIBRARY_PATH)
 COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
 
+# Auto-generate SDL2 GameController mappings for unmapped joysticks
+COPY /root/usr/local/bin/esde-gamepad-map /usr/local/bin/esde-gamepad-map
+
 # ES-DE and emulator log tailer (always active)
 COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-logs /etc/s6-overlay/s6-rc.d/svc-esde-logs
 
@@ -344,6 +352,7 @@ RUN set -eux; \
   chmod 755 /usr/local/bin/esde-local-input; \
   chmod 755 /usr/local/bin/esde-audio; \
   chmod 755 /usr/local/bin/esde-emuwrap; \
+  chmod 755 /usr/local/bin/esde-gamepad-map; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/type; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/up; \

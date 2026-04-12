@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""esde-gamepad-map — Auto-generate SDL2 GameController mappings for unmapped joysticks.
+
+Scans /sys/class/input/js* for joystick devices, checks whether each has a
+known mapping in the community gamecontrollerdb.txt (and any user-provided
+SDL_GAMECONTROLLERCONFIG), then generates generic fallback mappings for
+devices that are not recognised.
+
+These fallback mappings allow cheap/generic USB gamepads (e.g. DragonRise
+"Generic USB Joystick") to appear in SDL2's GameController API so ES-DE
+can detect, configure, and use them.
+
+Usage:
+    esde-gamepad-map [gamecontrollerdb.txt]
+
+Output:
+    stdout  — newline-separated SDL2 GameController mapping strings
+    stderr  — diagnostic log messages
+"""
+
+import os
+import struct
+import sys
+from pathlib import Path
+
+GAMECONTROLLERDB_DEFAULT = "/usr/local/share/es-de/gamecontrollerdb.txt"
+
+# ── Linux input event codes (from <linux/input-event-codes.h>) ───────────
+ABS_X, ABS_Y, ABS_Z = 0x00, 0x01, 0x02
+ABS_RX, ABS_RY, ABS_RZ = 0x03, 0x04, 0x05
+ABS_HAT0X = 0x10
+ABS_HAT3Y = 0x17
+ABS_MAX = 0x3F
+
+BTN_JOYSTICK = 0x120
+KEY_MAX = 0x2FF
+
+# Bits per unsigned long — needed to parse sysfs capability bitmasks.
+BITS_PER_LONG = struct.calcsize("P") * 8
+
+
+def log(msg):
+    print(f"[gamepad-map] {msg}", file=sys.stderr)
+
+
+# ── GUID helpers ─────────────────────────────────────────────────────────
+
+def compute_guid(bus, vendor, product):
+    """Old-style SDL2 GUID (version zeroed for maximum DB compatibility)."""
+    return struct.pack("<HHHHHHHH", bus, 0, vendor, 0, product, 0, 0, 0).hex()
+
+
+def _normalize(guid):
+    """bus + vendor + product key (ignores CRC / version / driver fields)."""
+    return guid[:4] + guid[8:12] + guid[16:20]
+
+
+def load_known_guids(db_path, env_config):
+    """Return a set of normalised GUIDs from the DB file and env var."""
+    normalised = set()
+    sources = []
+    if db_path and os.path.isfile(db_path):
+        sources.append(open(db_path))
+    if env_config:
+        import io
+        sources.append(io.StringIO(env_config))
+    for src in sources:
+        for line in src:
+            line = line.strip()
+            if line and not line.startswith("#") and "," in line:
+                guid = line.split(",", 1)[0].strip().lower()
+                if len(guid) == 32:
+                    normalised.add(_normalize(guid))
+        if hasattr(src, "close"):
+            src.close()
+    return normalised
+
+
+# ── sysfs capability parsing ─────────────────────────────────────────────
+
+def parse_bitmask(hex_str):
+    """Parse a sysfs capability bitmask into a set of set-bit positions."""
+    words = hex_str.strip().split()
+    if not words:
+        return set()
+    value = 0
+    for i, word in enumerate(reversed(words)):
+        value |= int(word, 16) << (i * BITS_PER_LONG)
+    bits = set()
+    pos = 0
+    while value:
+        if value & 1:
+            bits.add(pos)
+        value >>= 1
+        pos += 1
+    return bits
+
+
+def _read(path):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return None
+
+
+# ── SDL2 enumeration helpers ─────────────────────────────────────────────
+# SDL2 on Linux assigns sequential indices to axes and buttons following a
+# specific enumeration order that differs from the raw evdev code numbers.
+
+def _sdl2_axes(abs_codes):
+    """Yield (sdl_index, evdev_code) in SDL2 enumeration order."""
+    idx = 0
+    for code in range(ABS_MAX + 1):
+        if ABS_HAT0X <= code <= ABS_HAT3Y:
+            continue  # hats are separate; not counted as axes
+        if code in abs_codes:
+            yield idx, code
+            idx += 1
+
+
+def _sdl2_buttons(key_codes):
+    """Yield (sdl_index, evdev_code) in SDL2 enumeration order.
+
+    SDL2 enumerates BTN_JOYSTICK..KEY_MAX first, then 0..BTN_JOYSTICK.
+    """
+    idx = 0
+    for code in range(BTN_JOYSTICK, KEY_MAX + 1):
+        if code in key_codes:
+            yield idx, code
+            idx += 1
+    for code in range(BTN_JOYSTICK):
+        if code in key_codes:
+            yield idx, code
+            idx += 1
+
+
+# ── Mapping generator ───────────────────────────────────────────────────
+
+def generate_mapping(guid, name, abs_codes, key_codes):
+    """Build a generic SDL2 GameController mapping string."""
+    axis_idx = {code: idx for idx, code in _sdl2_axes(abs_codes)}
+    num_buttons = sum(1 for _ in _sdl2_buttons(key_codes))
+    parts = []
+
+    # ── D-pad ──
+    has_hat = ABS_HAT0X in abs_codes and (ABS_HAT0X + 1) in abs_codes
+    has_xy = ABS_X in abs_codes and ABS_Y in abs_codes
+
+    if has_hat:
+        parts += ["dpup:h0.1", "dpdown:h0.4", "dpleft:h0.8", "dpright:h0.2"]
+        if has_xy:
+            parts += [f"leftx:a{axis_idx[ABS_X]}", f"lefty:a{axis_idx[ABS_Y]}"]
+    elif has_xy:
+        ax, ay = axis_idx[ABS_X], axis_idx[ABS_Y]
+        parts += [f"dpup:-a{ay}", f"dpdown:+a{ay}",
+                  f"dpleft:-a{ax}", f"dpright:+a{ax}"]
+
+    # ── Right stick ──
+    if ABS_RX in abs_codes and ABS_RY in abs_codes:
+        parts += [f"rightx:a{axis_idx[ABS_RX]}", f"righty:a{axis_idx[ABS_RY]}"]
+
+    # ── Triggers ──
+    if ABS_Z in abs_codes:
+        parts.append(f"lefttrigger:a{axis_idx[ABS_Z]}")
+    if ABS_RZ in abs_codes:
+        parts.append(f"righttrigger:a{axis_idx[ABS_RZ]}")
+
+    # ── Buttons — assign sequentially ──
+    btn_names = [
+        "a", "b", "x", "y",
+        "leftshoulder", "rightshoulder",
+        "back", "start",
+        "guide", "leftstick", "rightstick",
+    ]
+    for i, bname in enumerate(btn_names):
+        if i < num_buttons:
+            parts.append(f"{bname}:b{i}")
+
+    safe_name = name.replace(",", " ")
+    return f"{guid},{safe_name},{','.join(parts)},platform:Linux,"
+
+
+# ── Main ─────────────────────────────────────────────────────────────────
+
+def main():
+    db_path = sys.argv[1] if len(sys.argv) > 1 else GAMECONTROLLERDB_DEFAULT
+    env_cfg = os.environ.get("SDL_GAMECONTROLLERCONFIG", "")
+
+    known = load_known_guids(db_path, env_cfg)
+
+    js_root = Path("/sys/class/input")
+    if not js_root.exists():
+        log("No /sys/class/input — skipping gamepad scan")
+        return
+
+    seen_guids = set()
+    generated = []
+
+    for js_path in sorted(js_root.glob("js*")):
+        dev_dir = js_path / "device"
+        if not dev_dir.exists():
+            continue
+
+        bus_s = _read(dev_dir / "id" / "bustype")
+        ven_s = _read(dev_dir / "id" / "vendor")
+        pro_s = _read(dev_dir / "id" / "product")
+        name = _read(dev_dir / "name")
+        if not all((bus_s, ven_s, pro_s, name)):
+            continue
+
+        bus = int(bus_s, 16)
+        vendor = int(ven_s, 16)
+        product = int(pro_s, 16)
+        guid = compute_guid(bus, vendor, product)
+
+        if guid in seen_guids:
+            continue
+        seen_guids.add(guid)
+
+        if _normalize(guid) in known:
+            log(f"DB-mapped: {name} ({guid})")
+            continue
+
+        abs_hex = _read(dev_dir / "capabilities" / "abs")
+        key_hex = _read(dev_dir / "capabilities" / "key")
+        abs_codes = parse_bitmask(abs_hex) if abs_hex else set()
+        key_codes = parse_bitmask(key_hex) if key_hex else set()
+
+        if not abs_codes:
+            log(f"Skip (no axes): {name}")
+            continue
+
+        mapping = generate_mapping(guid, name, abs_codes, key_codes)
+        generated.append(mapping)
+        log(f"Auto-mapped: {name} -> {guid}")
+
+    for m in generated:
+        print(m)
+
+
+if __name__ == "__main__":
+    main()

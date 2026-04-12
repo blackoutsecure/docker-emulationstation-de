@@ -502,9 +502,43 @@ if [[ -d /dev/input ]]; then
     fi
     break
   done
-  # SDL2 GameController mapping note
+  # --- SDL2 GameController auto-mapping for unmapped joysticks ---
+  # SDL2's GameController API requires a known button mapping to open a device.
+  # Without one, gamepads (e.g. DragonRise "Generic USB Joystick") are invisible
+  # to ES-DE.  We load the community DB (~3000 mappings) and auto-generate
+  # generic fallback mappings for anything still unrecognised.
   if [[ ${_js_count} -gt 0 ]]; then
-    _summary_input="${_summary_input} | DragonRise/generic pads need SDL_GAMECONTROLLERCONFIG"
+    _gcdb="/usr/local/share/es-de/gamecontrollerdb.txt"
+    _gcdb_runtime="/tmp/gamecontrollerdb.txt"
+    # Start with the community database
+    if [[ -f "${_gcdb}" ]]; then
+      cp "${_gcdb}" "${_gcdb_runtime}"
+    else
+      touch "${_gcdb_runtime}"
+    fi
+    # Auto-generate mappings for joysticks not in the community DB
+    _auto_map_count=0
+    if [[ -x /usr/local/bin/esde-gamepad-map ]]; then
+      _map_log="/tmp/gamepad-map.log"
+      _map_out="$(/usr/local/bin/esde-gamepad-map "${_gcdb_runtime}" 2>"${_map_log}")" || true
+      if [[ -n "${_map_out}" ]]; then
+        echo "${_map_out}" >> "${_gcdb_runtime}"
+        _auto_map_count="$(echo "${_map_out}" | wc -l)"
+      fi
+      # Relay diagnostic output
+      while IFS= read -r _map_line; do
+        echo "[svc-esde] ${_map_line}"
+      done < "${_map_log}" 2>/dev/null || true
+    fi
+    # SDL_GAMECONTROLLERCONFIG_FILE loads the merged DB+auto-generated mappings.
+    # User-provided SDL_GAMECONTROLLERCONFIG (env var) takes highest priority.
+    export SDL_GAMECONTROLLERCONFIG_FILE="${_gcdb_runtime}"
+    if [[ ${_auto_map_count} -gt 0 ]]; then
+      _summary_input="${_summary_input} | ${_auto_map_count} gamepad(s) auto-mapped"
+    fi
+    if [[ -n "${SDL_GAMECONTROLLERCONFIG:-}" ]]; then
+      _summary_input="${_summary_input} | user SDL_GAMECONTROLLERCONFIG set"
+    fi
   fi
 else
   _summary_input="Input: WARNING /dev/input not found"

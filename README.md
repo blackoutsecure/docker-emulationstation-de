@@ -65,7 +65,8 @@ Quick links:
   - [Build Locally](#build-locally)
   - [Troubleshooting](#troubleshooting)
     - [Display errors on startup](#display-errors-on-startup)
-    - [Input devices not detected](#input-devices-not-detected)
+  - [Input devices not detected](#input-devices-not-detected)
+    - [Gamepad Mapping](#gamepad-mapping)
     - [AArch64 systems with GLES-only drivers](#aarch64-systems-with-gles-only-drivers)
   - [Release \& Versioning](#release--versioning)
   - [Support \& Getting Help](#support--getting-help)
@@ -534,6 +535,7 @@ Any emulator can be provisioned the same way: `esde-provision` copies the binary
 | `-e ESDE_ARGS=` | Extra command line flags appended to `es-de --home /config` | Optional |
 | `-e APP_USER=abc` | Container user for ES-DE process execution (default: `abc`; LinuxServer.io standard) | Optional |
 | `-e ESDE_HOME=/config` | ES-DE home directory for configuration and persistent data | Optional |
+| `-e SDL_GAMECONTROLLERCONFIG=` | Manual SDL2 GameController mapping override for specific gamepads (see [Gamepad Mapping](#gamepad-mapping)) | Optional |
 
 ### Storage Mounts
 
@@ -703,6 +705,36 @@ docker build \
 - validate permissions for `/dev/input`, `/dev/uinput`, and any USB devices in use
 - check container logs for `[svc-esde] Starting udevd` to confirm udev started successfully
 
+### Gamepad Mapping
+
+ES-DE uses SDL2's **GameController API**, which requires a known button mapping to recognise a gamepad. Without a mapping, a gamepad may show up in the kernel (`/dev/input/js*`) but remain invisible to ES-DE.
+
+This image handles gamepad mapping automatically with three layers (highest priority first):
+
+| Priority | Source | Covers |
+|----------|--------|--------|
+| 1 | `SDL_GAMECONTROLLERCONFIG` env var | User manual overrides |
+| 2 | Auto-generated generic mappings | Unknown/unmapped devices (e.g. DragonRise) |
+| 3 | Bundled community [gamecontrollerdb.txt](https://github.com/gabomdq/SDL_GameControllerDB) | ~3000 known gamepads |
+| 4 | SDL2 built-in DB | Major brand controllers (Xbox, PlayStation, Switch) |
+
+**Most gamepads work out of the box.** If yours doesn't, or the auto-generated mapping has incorrect button assignments:
+
+1. Find your gamepad's SDL2 GUID — check the startup logs for the `[gamepad-map]` lines, or run `sdl2-jstest --list` inside the container
+2. Generate a correct mapping at [SDL_GameControllerDB](https://github.com/gabomdq/SDL_GameControllerDB) or [General Arcade Gamepad Tool](https://generalarcade.com/gamepadtool/)
+3. Set the mapping in your compose environment:
+
+```yaml
+environment:
+  SDL_GAMECONTROLLERCONFIG: "03000000790000001100000000000000,DragonRise Generic USB Joystick,a:b2,b:b1,x:b3,y:b0,back:b8,start:b9,leftshoulder:b4,rightshoulder:b5,dpup:-a1,dpdown:+a1,dpleft:-a0,dpright:+a0,platform:Linux,"
+```
+
+**Startup log example when auto-mapping works:**
+```
+[svc-esde] [gamepad-map] Auto-mapped: DragonRise Inc.   Generic   USB  Joystick   -> 03000000790000001100000000000000
+[svc-esde] Input: 11 events, 4 joysticks [...] | 1 gamepad(s) auto-mapped
+```
+
 ### AArch64 systems with GLES-only drivers
 
 - rebuild with `ESDE_GLES=on`
@@ -752,3 +784,4 @@ Stable builds follow upstream ES-DE release metadata. Dev builds follow the upst
 - Linux AArch64 dev docs: <https://gitlab.com/es-de/emulationstation-de/-/blob/master/LINUX-AARCH64-DEV.md>
 - LSIO Ubuntu base image: <https://docs.linuxserver.io/images/docker-baseimage-ubuntu/>
 - LSIO Selkies base image: <https://github.com/linuxserver/docker-baseimage-selkies>
+- SDL_GameControllerDB (community gamepad mappings): <https://github.com/gabomdq/SDL_GameControllerDB>

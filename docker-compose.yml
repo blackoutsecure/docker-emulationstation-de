@@ -62,9 +62,12 @@ services:
       #
       # LOCAL_AUDIO_SINK: ''            # Override auto-detect with a specific PulseAudio sink name
       # --- Gamepad mapping ---
-      # Generic USB joysticks (e.g. DragonRise) need an SDL2 GameController
-      # mapping.  Generate one at https://github.com/gabomdq/SDL_GameControllerDB
-      # SDL_GAMECONTROLLERCONFIG: ''    # Paste mapping string here
+      # Most gamepads are auto-detected via the bundled community database
+      # (~3000 mappings) and a generic fallback mapper for unknown devices.
+      # If auto-mapping produces incorrect button assignments, generate a
+      # custom mapping at https://github.com/gabomdq/SDL_GameControllerDB
+      # and paste it here — it overrides the auto-generated mapping.
+      # SDL_GAMECONTROLLERCONFIG: ''    # Manual override mapping string
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
