@@ -5,12 +5,10 @@
 # Build targets:
 #   default             — Local display / kiosk (KMSDRM, X11, hardware passthrough)
 #   selkies             — Selkies WebRTC remote access (stream to web browser)
-#   emulator-provider   — Sidecar: provisions emulator binaries + cores onto a shared volume
 #
 # Build examples:
 #   docker build --target default -t esde:latest .
 #   docker build --target selkies -t esde:latest-selkies .
-#   docker build --target emulator-provider -t esde-emulator-provider:latest .
 
 ARG BASE_IMAGE_REGISTRY=ghcr.io
 ARG BASE_IMAGE_NAME=linuxserver/baseimage-ubuntu
@@ -22,12 +20,6 @@ ARG SELKIES_BASE_IMAGE_REGISTRY=ghcr.io
 ARG SELKIES_BASE_IMAGE_NAME=linuxserver/baseimage-selkies
 ARG SELKIES_BASE_IMAGE_VARIANT=ubuntunoble
 ARG SELKIES_BASE_IMAGE=${SELKIES_BASE_IMAGE_REGISTRY}/${SELKIES_BASE_IMAGE_NAME}:${SELKIES_BASE_IMAGE_VARIANT}
-
-# RetroArch image used by the emulator-provider sidecar.
-# This is the official linuxserver.io community image — we pull it as-is
-# and only add libretro cores on top.  No RetroArch compilation needed.
-#   https://docs.linuxserver.io/images/docker-retroarch/
-ARG RETROARCH_IMAGE=lscr.io/linuxserver/retroarch:latest
 
 ARG BUILD_OUTPUT_DIR=/out
 ARG ESDE_REPO=https://gitlab.com/es-de/emulationstation-de.git
@@ -209,8 +201,8 @@ COPY --from=builder /out/usr/local/ /usr/local/
 COPY --from=builder /out/defaults/roms/ /defaults/roms/
 
 COPY /root/usr/local/bin/esde-startx-session /usr/local/bin/esde-startx-session
-COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
 COPY /root/usr/local/bin/esde-gamepad-map /usr/local/bin/esde-gamepad-map
+COPY /root/usr/local/bin/retrostack-emulator-launch /usr/local/bin/retrostack-emulator-launch
 COPY /root/etc/s6-overlay/s6-rc.d /etc/s6-overlay/s6-rc.d
 
 RUN set -eux; \
@@ -222,7 +214,7 @@ RUN set -eux; \
   chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d; \
   chmod 755 /etc/s6-overlay/s6-rc.d/user/contents.d; \
   chmod 644 /etc/s6-overlay/s6-rc.d/svc-esde/type /etc/s6-overlay/s6-rc.d/svc-esde/dependencies.d/init-services /etc/s6-overlay/s6-rc.d/user/contents.d/svc-esde; \
-  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde/run /usr/local/bin/esde-startx-session /usr/local/bin/esde-emuwrap /usr/local/bin/esde-gamepad-map
+  chmod 755 /etc/s6-overlay/s6-rc.d/svc-esde/run /usr/local/bin/esde-startx-session /usr/local/bin/esde-gamepad-map /usr/local/bin/retrostack-emulator-launch
 
 VOLUME /config
 
@@ -330,8 +322,8 @@ COPY /root/etc/s6-overlay/s6-rc.d/svc-local-input /etc/s6-overlay/s6-rc.d/svc-lo
 COPY /root/usr/local/bin/esde-audio /usr/local/bin/esde-audio
 COPY /root/etc/s6-overlay/s6-rc.d/svc-esde-audio /etc/s6-overlay/s6-rc.d/svc-esde-audio
 
-# Generic emulator wrapper (calls emulators from /emulators/<name>/ with correct LD_LIBRARY_PATH)
-COPY /root/usr/local/bin/esde-emuwrap /usr/local/bin/esde-emuwrap
+# RetroStack FIFO launcher (calls emulators in RetroStack containers via FIFO control pipes)
+COPY /root/usr/local/bin/retrostack-emulator-launch /usr/local/bin/retrostack-emulator-launch
 
 # Auto-generate SDL2 GameController mappings for unmapped joysticks
 COPY /root/usr/local/bin/esde-gamepad-map /usr/local/bin/esde-gamepad-map
@@ -351,8 +343,8 @@ RUN set -eux; \
   chmod 755 /usr/local/bin/esde-hdmi-mirror; \
   chmod 755 /usr/local/bin/esde-local-input; \
   chmod 755 /usr/local/bin/esde-audio; \
-  chmod 755 /usr/local/bin/esde-emuwrap; \
   chmod 755 /usr/local/bin/esde-gamepad-map; \
+  chmod 755 /usr/local/bin/retrostack-emulator-launch; \
   chmod 755 /etc/s6-overlay/s6-rc.d/init-esde-config; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/type; \
   chmod 644 /etc/s6-overlay/s6-rc.d/init-esde-config/up; \
@@ -389,57 +381,3 @@ RUN set -eux; \
 EXPOSE 3000 3001
 
 VOLUME /config
-
-# ============================================================================
-# Stage 3 — Emulator Provider Sidecar
-#   docker build --target emulator-provider .
-#
-# Uses the linuxserver.io community RetroArch image directly — no compilation.
-#   https://docs.linuxserver.io/images/docker-retroarch/
-#
-# RetroArch is already installed in that image (via ppa:libretro/stable).
-# We only add libretro cores on top, then run esde-provision to copy
-# the binary, cores, and required shared libraries to a shared volume.
-#
-# The ES-DE container mounts the volume at /emulators and calls
-# emulators via esde-emuwrap (resolves emulator from symlink name,
-# sets LD_LIBRARY_PATH, exec's the real binary).
-#
-# Independent update cycles:
-#   - Update RetroArch: docker pull the new linuxserver image, rebuild sidecar
-#   - Update ES-DE:     rebuild the ES-DE image (emulators untouched)
-#
-# Override RETROARCH_IMAGE at the top of this file to pin a version:
-#   ARG RETROARCH_IMAGE=lscr.io/linuxserver/retroarch:1.22.2
-# ============================================================================
-FROM ${RETROARCH_IMAGE} AS emulator-provider
-
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-LABEL org.opencontainers.image.title="esde-emulator-provider" \
-  org.opencontainers.image.description="Sidecar that provisions RetroArch + libretro cores for ES-DE. Based on linuxserver/docker-retroarch."
-
-# RetroArch is already installed from the linuxserver image.
-# The linuxserver image ships NO libretro cores — only the frontend binary,
-# assets, and core-info metadata.  Install commonly-used cores from the
-# Ubuntu/PPA repos (the PPA source list is already configured in the image).
-RUN echo "**** install libretro cores ****" && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-      libretro-gambatte \
-      libretro-mgba \
-      libretro-snes9x \
-      libretro-nestopia \
-      libretro-genesis-plus-gx \
-      libretro-beetle-pce-fast \
-      2>/dev/null; \
-    echo "**** cleanup ****" && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/*
-
-COPY /root/usr/local/bin/esde-provision /usr/local/bin/esde-provision
-RUN chmod 755 /usr/local/bin/esde-provision
-
-VOLUME /export
-
-ENTRYPOINT ["/usr/local/bin/esde-provision"]

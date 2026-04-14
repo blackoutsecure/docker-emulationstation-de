@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# retrostack-emulator-launch — Client-side FIFO launcher for ES-DE integration.
+#
+# This script is the bridge between ES-DE and RetroStack emulator containers.
+# ES-DE calls emulators by name (e.g., retroarch, PPSSPPSDL, dolphin-emu).
+# This script is symlinked as each emulator name on PATH.  When invoked, it:
+#   1. Resolves the emulator name from argv[0] (the symlink name)
+#   2. Writes the launch arguments to the emulator's FIFO command pipe
+#   3. Reads the exit code from the status pipe and returns it
+#
+# The RetroStack emulator container creates the FIFO pipes at:
+#   /run/retrostack-emulators/<name>.cmd    (ES-DE → Emulator)
+#   /run/retrostack-emulators/<name>.status (Emulator → ES-DE)
+#
+# See: https://github.com/blackoutsecure/docker-retrostack
+#
+# Copyright (c) 2026 Blackout Secure (https://blackoutsecure.app). MIT License.
+set -euo pipefail
+
+CONTROL_DIR="${RETROSTACK_EMULATORS_CONTROL:-/run/retrostack-emulators}"
+SCRIPT_NAME="$(basename "$0")"
+
+# Resolve emulator name: if called as "retrostack-emulator-launch <emu> [args]",
+# take the first argument as the emulator name.  Otherwise, derive from symlink.
+if [[ "${SCRIPT_NAME}" == "retrostack-emulator-launch" ]]; then
+  [[ $# -lt 1 ]] && { echo "Usage: retrostack-emulator-launch <emulator> [args...] <rom>" >&2; exit 1; }
+  EMU_NAME="$1"; shift
+else
+  EMU_NAME="${SCRIPT_NAME}"
+fi
+
+CMD_PIPE="${CONTROL_DIR}/${EMU_NAME}.cmd"
+STATUS_PIPE="${CONTROL_DIR}/${EMU_NAME}.status"
+
+if [[ ! -p "${CMD_PIPE}" ]]; then
+  echo "[retrostack] ERROR: pipe not found: ${CMD_PIPE}" >&2
+  echo "[retrostack] Is the ${EMU_NAME} container running? Start:" >&2
+  echo "[retrostack]   docker compose --profile ${EMU_NAME} up -d" >&2
+  exit 127
+fi
+
+# Encode arguments using unit separator (0x1f) delimiter
+CMD_LINE=""
+for arg in "$@"; do
+  [[ -n "${CMD_LINE}" ]] && CMD_LINE+=$'\x1f'
+  CMD_LINE+="${arg}"
+done
+
+# Send launch command to emulator container
+echo "${CMD_LINE}" > "${CMD_PIPE}"
+
+# Wait for exit code from emulator
+EXIT_CODE=0
+read -r EXIT_CODE < "${STATUS_PIPE}" || EXIT_CODE=1
+exit "${EXIT_CODE}"

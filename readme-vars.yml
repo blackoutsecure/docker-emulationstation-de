@@ -90,6 +90,8 @@ app_setup_block: |
 
   **Build toggles**: When rebuilding locally, `ESDE_GLES`, `ESDE_DEINIT_ON_LAUNCH`, `ESDE_VIDEO_HW_DECODING`, and `ESDE_APPLICATION_UPDATER` are available as build arguments.
 
+  **RetroStack Integration**: This image integrates with [RetroStack](https://github.com/blackoutsecure/docker-retrostack) emulator containers via FIFO control pipes. Start RetroStack emulators alongside ES-DE with `docker compose --profile default --profile retrostack up -d`. RetroStack provides RetroArch, PPSSPP, and Dolphin as separate containers that listen for launch commands from ES-DE. No emulator binaries need to be installed inside the ES-DE container.
+
   For upstream application details, see the [ES-DE project]({{ project_url }}).
 
 # hardware acceleration

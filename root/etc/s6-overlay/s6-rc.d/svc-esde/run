@@ -549,76 +549,51 @@ fi
 # Without an emulator, game launch will fail with:
 #   Error: %EMULATOR_RETROARCH% ... not found
 #
-# Supported RetroArch: https://docs.linuxserver.io/images/docker-retroarch/
-#
-# Emulators are provided via the sidecar volume at /emulators/<name>
-# (esde-emulator-provider).  Start with --profile sidecar.
+# Emulators are provided by RetroStack containers (docker-retrostack) which
+# listen on FIFO pipes at /run/retrostack-emulators/<name>.cmd and .status.
+# retrostack-emulator-launch writes to the pipe, waits for exit code.
+# See: https://github.com/blackoutsecure/docker-retrostack
 
-_emulators_home="/emulators"
-_esde_emuwrap="/usr/local/bin/esde-emuwrap"
+_retrostack_control="${RETROSTACK_EMULATORS_CONTROL:-/run/retrostack-emulators}"
+_retrostack_launch="/usr/local/bin/retrostack-emulator-launch"
+_retrostack_shared="/run/retrostack-shared"
 
-# Scan for sidecar-provisioned emulators and set up PATH integration
-if [[ -d "${_emulators_home}" ]]; then
-  _found_any=false
-  for _emu_dir in "${_emulators_home}"/*/; do
-    [[ -d "${_emu_dir}" ]] || continue
-    _emu_name="$(basename "${_emu_dir}")"
-    _emu_bin="${_emu_dir}bin/${_emu_name}"
-    if [[ -x "${_emu_bin}" ]] && ! command -v "${_emu_name}" >/dev/null 2>&1; then
-      # Symlink generic wrapper as the emulator name on PATH
-      if [[ -x "${_esde_emuwrap}" ]]; then
-        ln -sf "${_esde_emuwrap}" "/usr/local/bin/${_emu_name}"
-      else
-        ln -sf "${_emu_bin}" "/usr/local/bin/${_emu_name}"
-      fi
-      _found_any=true
-    fi
+# --- RetroStack FIFO integration ---
+# Scan for FIFO command pipes created by running RetroStack emulator containers.
+# For each <name>.cmd pipe found, symlink retrostack-emulator-launch as the
+# emulator name on PATH so ES-DE can launch games via the FIFO protocol.
+_retrostack_emus=""
+if [[ -d "${_retrostack_control}" && -x "${_retrostack_launch}" ]]; then
+  for _cmd_pipe in "${_retrostack_control}"/*.cmd; do
+    [[ -p "${_cmd_pipe}" ]] || continue
+    _emu_name="$(basename "${_cmd_pipe}" .cmd)"
+    ln -sf "${_retrostack_launch}" "/usr/local/bin/${_emu_name}"
+    _retrostack_emus="${_retrostack_emus:+${_retrostack_emus}, }${_emu_name}"
   done
 
-  # Handle empty volume (sidecar hasn't run) — noted in summary only
-  if ! ${_found_any} && [[ "$(find "${_emulators_home}" -maxdepth 0 -empty 2>/dev/null)" ]]; then
-    _summary_emulator="Emulator: /emulators empty (sidecar not run)"
+  # Export the gamepad DB to the shared volume so RetroStack emulators
+  # use ES-DE's auto-generated + community mappings.
+  if [[ -d "${_retrostack_shared}" ]]; then
+    _gcdb_runtime="/tmp/gamecontrollerdb.txt"
+    if [[ -f "${_gcdb_runtime}" ]]; then
+      cp -f "${_gcdb_runtime}" "${_retrostack_shared}/gamecontrollerdb.txt" 2>/dev/null || true
+    elif [[ -f "/usr/local/share/es-de/gamecontrollerdb.txt" ]]; then
+      cp -f "/usr/local/share/es-de/gamecontrollerdb.txt" "${_retrostack_shared}/gamecontrollerdb.txt" 2>/dev/null || true
+    fi
+    # Share Xauthority so RetroStack containers can access the X display
+    if [[ -f "${XAUTHORITY:-}" ]]; then
+      cp -f "${XAUTHORITY}" "${_retrostack_shared}/.Xauthority" 2>/dev/null || true
+      chmod 644 "${_retrostack_shared}/.Xauthority" 2>/dev/null || true
+    fi
   fi
 fi
 
-# RetroArch-specific: link cores directory into standard search path
-_ra_sidecar="${_emulators_home}/retroarch"
-if [[ -d "${_ra_sidecar}/cores" ]]; then
-  ln -sfn "${_ra_sidecar}/cores" /usr/lib/libretro 2>/dev/null || true
-fi
-
-# Check RetroArch status (primary emulator for ES-DE)
-if command -v retroarch >/dev/null 2>&1; then
-  _ra_source="installed"
-  if [[ -x "${_ra_sidecar}/bin/retroarch" ]]; then
-    _ra_source="sidecar"
-  fi
-  _ra_ver="$(retroarch --version 2>&1 | head -1)" || _ra_ver="unknown"
-  _summary_emulator="Emulator: RetroArch (${_ra_source}) ${_ra_ver}"
-  # Check for libretro cores
-  _core_dirs=(/usr/lib/libretro /usr/lib/*/libretro "${_ra_sidecar}/cores" "${ESDE_HOME:-/config}/.config/retroarch/cores")
-  _core_count=0
-  for _cdir in "${_core_dirs[@]}"; do
-    if [[ -d "${_cdir}" ]]; then
-      _n="$(find "${_cdir}" -maxdepth 1 -name '*.so' 2>/dev/null | wc -l)"
-      _core_count=$((_core_count + _n))
-    fi
-  done
-  if [[ ${_core_count} -gt 0 ]]; then
-    _core_names=""
-    for _cdir in "${_core_dirs[@]}"; do
-      [[ -d "${_cdir}" ]] || continue
-      for _core_file in "${_cdir}"/*.so; do
-        [[ -f "${_core_file}" ]] || continue
-        _core_names="${_core_names:+${_core_names}, }$(basename "${_core_file}" .so)"
-      done
-    done
-    _summary_emulator="${_summary_emulator} | ${_core_count} cores: ${_core_names}"
-  else
-    _summary_emulator="${_summary_emulator} | WARNING: no libretro cores"
-  fi
+if [[ -n "${_retrostack_emus}" ]]; then
+  _summary_emulator="Emulator: RetroStack [${_retrostack_emus}]"
 else
-  _summary_emulator="Emulator: WARNING RetroArch NOT installed — games will fail"
+  _summary_emulator="Emulator: WARNING no emulators found — games will fail"
+  _summary_emulator="${_summary_emulator} | Start RetroStack: docker compose --profile retrostack up -d"
+  _summary_emulator="${_summary_emulator} | See: https://github.com/blackoutsecure/docker-retrostack"
 fi
 
 esde_home="${ESDE_HOME:-/config}"
@@ -742,6 +717,9 @@ emit_startup_summary() {
   echo "[svc-esde] ${_summary_esde_audio}"
   echo "[svc-esde] Audio output: ${_audio_output} (ESDE_AUDIO_OUTPUT=${ESDE_AUDIO_OUTPUT:-<unset>})"
   echo "[svc-esde] Video: ${_video_driver} (ESDE_VIDEO_DRIVER=${ESDE_VIDEO_DRIVER:-<unset>})"
+  if [[ -n "${_retrostack_emus:-}" ]]; then
+    echo "[svc-esde] RetroStack: ${_retrostack_emus} (FIFO @ ${_retrostack_control})"
+  fi
   echo "[svc-esde] Tailing: es_log.txt, Xorg.log, retroarch.log"
   echo "[svc-esde] ES-DE is idle at menu — logs appear on activity (input config, game launch, errors)"
   # Actionable hints based on detected state

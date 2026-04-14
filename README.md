@@ -48,9 +48,9 @@ Quick links:
     - [Docker Compose Hardware Examples](#docker-compose-hardware-examples)
     - [Docker CLI (click here for more info)](#docker-cli-click-here-for-more-info)
     - [Balena Deployment](#balena-deployment)
-  - [RetroArch \& Emulator Setup](#retroarch--emulator-setup)
-    - [RetroArch Sidecar](#retroarch-sidecar)
-    - [Using Other Emulators](#using-other-emulators)
+  - [RetroStack Emulator Integration](#retrostack-emulator-integration)
+    - [Control Pipe Protocol](#control-pipe-protocol)
+    - [Supported Emulators](#supported-emulators)
   - [Parameters](#parameters)
     - [Environment Variables](#environment-variables)
     - [Storage Mounts](#storage-mounts)
@@ -421,103 +421,73 @@ For deployment via the web interface, use the deploy button in this repository. 
 
 ---
 
-## RetroArch & Emulator Setup
+## RetroStack Emulator Integration
 
 > [!IMPORTANT]
-> ES-DE is a **frontend only** — it browses your game library and provides a controller-friendly UI, but it does **not** include any emulator. It launches emulators (typically RetroArch) as child processes. Without an emulator installed, games will fail to launch with:
+> ES-DE is a **frontend only** — it browses your game library and provides a controller-friendly UI, but it does **not** include any emulator. It launches emulators (typically RetroArch) as child processes. Without an emulator running, games will fail to launch with:
 > ```
 > Error: %EMULATOR_RETROARCH% -L %CORE_RETROARCH%/gambatte_libretro.so %ROM%
 > ```
 
-We default to and support [linuxserver/docker-retroarch](https://docs.linuxserver.io/images/docker-retroarch/) as the RetroArch version. The RetroArch binary must be in the **same container filesystem** as ES-DE (ES-DE calls `exec()` — a direct process spawn that shares the display, GPU, audio, and input context).
+Emulators are provided by [RetroStack](https://github.com/blackoutsecure/docker-retrostack) — a companion project that packages RetroArch, PPSSPP, and Dolphin as separate Docker containers. Both containers share a control volume and the same X11 display. ES-DE communicates with emulator containers via FIFO control pipes.
 
-> [!NOTE]
-> The [linuxserver/docker-retroarch](https://docs.linuxserver.io/images/docker-retroarch/) image is a standalone Selkies-based streaming app with its own display server. It cannot be used as a backend for ES-DE directly. Our sidecar extracts the same RetroArch package and provisions it onto a shared volume that ES-DE can access.
-
-### RetroArch Sidecar
-
-The sidecar uses the official [linuxserver/docker-retroarch](https://docs.linuxserver.io/images/docker-retroarch/) image directly — **no RetroArch compilation or package install**. We only add libretro cores and a thin provision script on top. This gives you **independent update cycles** — update RetroArch without rebuilding ES-DE, and vice versa.
+```
+┌──────────────────────────────┐                 ┌──────────────────────────┐
+│  RetroStack                  │                 │  emulationstation-de     │
+│  (docker-retrostack)         │                 │  (this repo)             │
+│                              │                 │                          │
+│  Emulator binary stays here  │  control pipe   │  User selects game       │
+│  Listens on FIFO for launch  │◀────────────────│  retrostack-emulator-    │
+│  commands, runs emulator on  │  /run/retro*/   │  launch writes to FIFO   │
+│  shared X11 display          │────────────────▶│  reads exit code back    │
+│                              │  exit status    │                          │
+└──────────────────────────────┘                 └──────────────────────────┘
+```
 
 ```bash
-# Start ES-DE + emulator sidecar
-docker compose --profile default --profile sidecar up -d
+# Start ES-DE + RetroStack emulators
+docker compose --profile default --profile retrostack up -d
 ```
 
 How it works:
-1. `esde-emulator-provider` is based on `lscr.io/linuxserver/retroarch:latest` with libretro cores added. It copies the RetroArch binary, cores, and shared libraries to a volume at `/emulators/retroarch/`, then exits
-2. ES-DE container mounts the same volume at `/emulators`
-3. On startup, ES-DE scans `/emulators/*/` and symlinks `esde-emuwrap` as each emulator name on PATH
-4. `esde-emuwrap` resolves the emulator from its symlink name (`$0`), sets `LD_LIBRARY_PATH` to the sidecar's bundled libraries, then exec's the real binary
+1. RetroStack emulator containers create FIFO pipes at `/run/retrostack-emulators/<name>.cmd` and `.status`
+2. ES-DE discovers the pipes on startup and symlinks `retrostack-emulator-launch` as each emulator name on PATH
+3. When the user selects a game, ES-DE calls the symlink. `retrostack-emulator-launch` writes the args to the `.cmd` pipe
+4. The emulator container reads it and runs the game on the shared X11 display
+5. When the game exits, the emulator writes the exit code to the `.status` pipe, giving control back to ES-DE
 
-**Update RetroArch only** (pulls latest linuxserver image):
-```bash
-docker compose --profile sidecar build --pull esde-emulator-provider
-docker compose --profile sidecar up esde-emulator-provider
-# Next game launch uses the new version — no ES-DE restart needed
+**Startup logs when RetroStack is connected:**
+```
+[svc-esde] Emulator: RetroStack [retroarch]
+[svc-esde] RetroStack: retroarch (FIFO @ /run/retrostack-emulators)
 ```
 
-**Pin a specific RetroArch version:**
-```bash
-docker compose --profile sidecar build \
-  --build-arg RETROARCH_IMAGE=lscr.io/linuxserver/retroarch:1.22.2 \
-  esde-emulator-provider
+**Startup logs when no emulators are found:**
+```
+[svc-esde] Emulator: WARNING no emulators found — games will fail
+[svc-esde]   Start RetroStack: docker compose --profile retrostack up -d
 ```
 
-**Update ES-DE only:**
-```bash
-docker compose --profile default build emulationstation
-docker compose --profile default up -d emulationstation
-# Emulator volume is untouched
-```
+### Control Pipe Protocol
 
-**Startup logs when sidecar is working:**
-```
-[svc-esde] Sidecar retroarch detected; linked via esde-emuwrap as /usr/local/bin/retroarch
-[svc-esde]   Version: RetroArch 1.22.2 (Git ...)
-[svc-esde] RetroArch found (sidecar): RetroArch 1.22.2 (Git ...)
-[svc-esde] Found 6 libretro core(s).
-[svc-esde]   Core: gambatte_libretro.so
-[svc-esde]   Core: mgba_libretro.so
-[svc-esde]   Core: snes9x_libretro.so
-...
-```
+Both containers share a volume at `/run/retrostack-emulators/`. Each emulator creates:
 
-**Startup logs when sidecar hasn't run:**
-```
-[svc-esde] Note: /emulators volume is mounted but empty.
-[svc-esde]   The esde-emulator-provider sidecar may not have run yet.
-[svc-esde]   Start it: docker compose --profile sidecar up esde-emulator-provider
-[svc-esde] ================================================
-[svc-esde] WARNING: RetroArch is NOT installed.
-...
-```
+| File | Direction | Purpose |
+|------|-----------|---------|
+| `<name>.cmd` | ES-DE → Emulator | FIFO — write emulator args (one line, shell-quoted) |
+| `<name>.status` | Emulator → ES-DE | FIFO — read exit code after game finishes |
 
-**Game launch error when emulator wrapper can't find the binary:**
-```
-[esde-emuwrap:retroarch] ================================================
-[esde-emuwrap:retroarch] ERROR: retroarch not found at /emulators/retroarch/bin/retroarch
-[esde-emuwrap:retroarch] Directory /emulators/retroarch exists but appears empty.
-[esde-emuwrap:retroarch] The emulator-provider sidecar has not run yet.
-[esde-emuwrap:retroarch]
-[esde-emuwrap:retroarch] To fix, start the sidecar:
-[esde-emuwrap:retroarch]   docker compose --profile sidecar up esde-emulator-provider
-...
-```
+### Supported Emulators
 
-### Using Other Emulators
+ES-DE supports [many emulators](https://gitlab.com/es-de/emulationstation-de/-/blob/master/USERGUIDE.md). RetroStack currently packages:
 
-The sidecar pattern is generic. ES-DE supports [many emulators](https://gitlab.com/es-de/emulationstation-de/-/blob/master/USERGUIDE.md) besides RetroArch:
+| Emulator | Docker Image Tag | What It Runs |
+|----------|-----------------|-------------|
+| RetroArch | `retrostack:retroarch` | Multi-system via libretro cores (recommended) |
+| PPSSPP | `retrostack:ppsspp` | PlayStation Portable |
+| Dolphin | `retrostack:dolphin-emu` | GameCube / Wii |
 
-| Emulator | ES-DE Variable | What It Runs |
-|----------|---------------|-------------|
-| RetroArch | `%EMULATOR_RETROARCH%` | Multi-system via libretro cores |
-| PPSSPP | `%EMULATOR_PPSSPP%` | PlayStation Portable |
-| Dolphin | `%EMULATOR_DOLPHIN%` | GameCube / Wii |
-| PCSX2 | `%EMULATOR_PCSX2%` | PlayStation 2 |
-| Flycast | `%EMULATOR_FLYCAST%` | Dreamcast |
-| melonDS | `%EMULATOR_MELONDS%` | Nintendo DS |
-
-Any emulator can be provisioned the same way: `esde-provision` copies the binary + libraries to `/emulators/<name>/`, and `esde-emuwrap` on the ES-DE side resolves the emulator from its symlink name and handles `LD_LIBRARY_PATH` isolation automatically.
+See [docker-retrostack](https://github.com/blackoutsecure/docker-retrostack) for adding new emulators.
 
 ---
 
