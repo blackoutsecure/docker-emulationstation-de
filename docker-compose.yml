@@ -25,6 +25,11 @@ x-retrostack-common: &retrostack-common
     - /run:exec
   shm_size: 1gb
   read_only: false
+  environment: &retrostack-env
+    DISPLAY: ':0'
+    PULSE_SERVER: 'unix:/run/pulse/native'
+    RETROSTACK_IDLE_TIMEOUT: '600'
+    RETROSTACK_FRONTEND_MODE: 'daemon'
   labels:
     io.balena.features.kernel-modules: '1'
     io.balena.features.firmware: '1'
@@ -35,8 +40,8 @@ x-retrostack-common: &retrostack-common
     - emulationstation-config:/config
     - emulationstation-roms:/roms:ro
     - emulationstation-bios:/bios:ro
-    - /tmp/.X11-unix:/tmp/.X11-unix:ro
-    - /run/user/${UID:-1000}/pulse:/run/pulse:ro
+    - x11-unix:/tmp/.X11-unix:ro
+    - pulse-socket:/run/pulse:ro
   devices:
     - /dev/dri:/dev/dri
     - /dev/input:/dev/input
@@ -118,30 +123,21 @@ services:
 
   retrostack-retroarch:
     <<: *retrostack-common
-    profiles: [retrostack]
+    profiles: [retrostack, retrostack-all]
     image: docker.io/blackoutsecure/retrostack:retroarch
     container_name: retrostack-retroarch
-    environment:
-      DISPLAY: ${DISPLAY:-:0}
-      PULSE_SERVER: ${PULSE_SERVER:-unix:/run/pulse/native}
 
   retrostack-ppsspp:
     <<: *retrostack-common
     profiles: [retrostack-ppsspp, retrostack-all]
     image: docker.io/blackoutsecure/retrostack:ppsspp
     container_name: retrostack-ppsspp
-    environment:
-      DISPLAY: ${DISPLAY:-:0}
-      PULSE_SERVER: ${PULSE_SERVER:-unix:/run/pulse/native}
 
   retrostack-dolphin-emu:
     <<: *retrostack-common
     profiles: [retrostack-dolphin, retrostack-all]
     image: docker.io/blackoutsecure/retrostack:dolphin-emu
     container_name: retrostack-dolphin-emu
-    environment:
-      DISPLAY: ${DISPLAY:-:0}
-      PULSE_SERVER: ${PULSE_SERVER:-unix:/run/pulse/native}
 
 volumes:
   emulationstation-config:
@@ -149,3 +145,5 @@ volumes:
   emulationstation-bios:
   retrostack-emulator-control:
   retrostack-shared:
+  x11-unix:
+  pulse-socket:

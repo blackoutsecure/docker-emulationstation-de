@@ -51,6 +51,7 @@ Quick links:
   - [RetroStack Emulator Integration](#retrostack-emulator-integration)
     - [Control Pipe Protocol](#control-pipe-protocol)
     - [Supported Emulators](#supported-emulators)
+    - [RetroStack Environment Variables](#retrostack-environment-variables)
   - [Parameters](#parameters)
     - [Compose Profiles](#compose-profiles)
     - [Environment Variables](#environment-variables)
@@ -69,7 +70,7 @@ Quick links:
   - [Build Locally](#build-locally)
   - [Troubleshooting](#troubleshooting)
     - [Display errors on startup](#display-errors-on-startup)
-  - [Input devices not detected](#input-devices-not-detected)
+    - [Input devices not detected](#input-devices-not-detected)
     - [Gamepad Mapping](#gamepad-mapping)
     - [AArch64 systems with GLES-only drivers](#aarch64-systems-with-gles-only-drivers)
   - [Release \& Versioning](#release--versioning)
@@ -493,6 +494,17 @@ ES-DE supports [many emulators](https://gitlab.com/es-de/emulationstation-de/-/b
 
 See [docker-retrostack](https://github.com/blackoutsecure/docker-retrostack) for adding new emulators.
 
+### RetroStack Environment Variables
+
+These variables are set in the `x-retrostack-common` anchor and inherited by all RetroStack services:
+
+| Parameter | Default | Function |
+|-----------|---------|----------|
+| `DISPLAY` | `:0` | X11 display for emulator rendering |
+| `PULSE_SERVER` | `unix:/run/pulse/native` | PulseAudio server socket |
+| `RETROSTACK_IDLE_TIMEOUT` | `600` | Seconds before idle emulator container shuts down |
+| `RETROSTACK_FRONTEND_MODE` | `daemon` | Emulator operating mode (`daemon` when driven by ES-DE frontend; `standalone` for independent operation) |
+
 ---
 
 ## Parameters
@@ -503,7 +515,7 @@ See [docker-retrostack](https://github.com/blackoutsecure/docker-retrostack) for
 | --- | --- | --- |
 | `default` | `docker compose --profile default up -d` | Local display / kiosk — direct output to a connected monitor via KMSDRM or X11. Best for arcade cabinets, HTPC, and Balena with a physical display. |
 | `selkies` | `docker compose --profile selkies up -d` | Selkies WebRTC streaming — stream ES-DE to any web browser. Access at `https://<host>:3001` (default user: `abc` / password: `abc`). Best for remote play, headless servers, and cloud deployments. |
-| `retrostack` | `docker compose --profile retrostack up -d` | RetroStack emulators (RetroArch). Combine with `default` or `selkies`. |
+| `retrostack` | `docker compose --profile retrostack up -d` | RetroStack emulators (RetroArch). Also included in `retrostack-all`. Combine with `default` or `selkies`. |
 | `retrostack-ppsspp` | `docker compose --profile retrostack-ppsspp up -d` | RetroStack PPSSPP emulator. |
 | `retrostack-dolphin` | `docker compose --profile retrostack-dolphin up -d` | RetroStack Dolphin emulator. |
 | `retrostack-all` | `docker compose --profile retrostack-all up -d` | All RetroStack emulators. |
@@ -611,6 +623,8 @@ Selkies WebRTC access: port `3000` (HTTP) and port `3001` (HTTPS, primary access
 | `emulationstation-bios` | BIOS files for emulators |
 | `retrostack-emulator-control` | FIFO control pipes shared with RetroStack containers |
 | `retrostack-shared` | Gamepad DB and Xauthority shared with RetroStack containers |
+| `x11-unix` | X11 socket shared between ES-DE and RetroStack containers |
+| `pulse-socket` | PulseAudio socket shared between ES-DE and RetroStack containers |
 
 ### Devices
 
