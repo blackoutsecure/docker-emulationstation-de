@@ -506,6 +506,7 @@ These variables are set in the `x-retrostack-common` anchor and inherited by all
 | `RETROSTACK_FRONTEND_MODE` | `daemon` | `standalone` (default in RetroStack) launches the emulator's own GUI; `daemon` listens on FIFO for ES-DE integration. Set to `daemon` here for integration mode |
 | `RETROSTACK_EMULATORS_CONTROL` | `/run/retrostack-emulators` | Control pipe directory (client-side) |
 | `RETROSTACK_USE_INTERNAL_X` | `1` | Start an internal Xorg server in standalone mode (`1`=auto, `0`=disabled — use external X socket). Not used in daemon mode |
+| `RETROSTACK_AUDIO_OUTPUT` | `auto` | Audio output selection: `auto` (USB > analog > HDMI), `analog`, `hdmi`, `usb`. Matches ES-DE's `ESDE_AUDIO_OUTPUT` behavior |
 
 ---
 

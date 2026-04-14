@@ -30,6 +30,7 @@ x-retrostack-common: &retrostack-common
     PULSE_SERVER: 'unix:/run/pulse/native'
     RETROSTACK_IDLE_TIMEOUT: '600'
     RETROSTACK_FRONTEND_MODE: 'daemon'
+    RETROSTACK_AUDIO_OUTPUT: 'auto'
   labels:
     io.balena.features.kernel-modules: '1'
     io.balena.features.firmware: '1'
@@ -37,7 +38,6 @@ x-retrostack-common: &retrostack-common
   volumes:
     - retrostack-emulator-control:/run/retrostack-emulators
     - retrostack-shared:/run/retrostack-shared:ro
-    - emulationstation-config:/config
     - emulationstation-roms:/roms:ro
     - emulationstation-bios:/bios:ro
     - x11-unix:/tmp/.X11-unix:ro
