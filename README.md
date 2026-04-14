@@ -52,7 +52,11 @@ Quick links:
     - [Control Pipe Protocol](#control-pipe-protocol)
     - [Supported Emulators](#supported-emulators)
   - [Parameters](#parameters)
+    - [Compose Profiles](#compose-profiles)
     - [Environment Variables](#environment-variables)
+      - [Default (Local Display) Service](#default-local-display-service)
+      - [Selkies (WebRTC Streaming) Service](#selkies-webrtc-streaming-service)
+      - [Audio Configuration (Default Service)](#audio-configuration-default-service)
     - [Storage Mounts](#storage-mounts)
     - [Devices](#devices)
     - [Runtime Security Defaults](#runtime-security-defaults)
@@ -493,7 +497,34 @@ See [docker-retrostack](https://github.com/blackoutsecure/docker-retrostack) for
 
 ## Parameters
 
+### Compose Profiles
+
+| Profile | Command | Description |
+| --- | --- | --- |
+| `default` | `docker compose --profile default up -d` | Local display / kiosk — direct output to a connected monitor via KMSDRM or X11. Best for arcade cabinets, HTPC, and Balena with a physical display. |
+| `selkies` | `docker compose --profile selkies up -d` | Selkies WebRTC streaming — stream ES-DE to any web browser. Access at `https://<host>:3001` (default user: `abc` / password: `abc`). Best for remote play, headless servers, and cloud deployments. |
+| `retrostack` | `docker compose --profile retrostack up -d` | RetroStack emulators (RetroArch). Combine with `default` or `selkies`. |
+| `retrostack-ppsspp` | `docker compose --profile retrostack-ppsspp up -d` | RetroStack PPSSPP emulator. |
+| `retrostack-dolphin` | `docker compose --profile retrostack-dolphin up -d` | RetroStack Dolphin emulator. |
+| `retrostack-all` | `docker compose --profile retrostack-all up -d` | All RetroStack emulators. |
+
+**Combined example:**
+
+```bash
+docker compose --profile default --profile retrostack up -d
+docker compose --profile selkies --profile retrostack up -d
+```
+
+**Build locally:**
+
+```bash
+docker compose --profile default build
+docker compose --profile selkies build
+```
+
 ### Environment Variables
+
+#### Default (Local Display) Service
 
 | Parameter | Function | Required |
 | :----: | --- | :---: |
@@ -506,6 +537,61 @@ See [docker-retrostack](https://github.com/blackoutsecure/docker-retrostack) for
 | `-e APP_USER=abc` | Container user for ES-DE process execution (default: `abc`; LinuxServer.io standard) | Optional |
 | `-e ESDE_HOME=/config` | ES-DE home directory for configuration and persistent data | Optional |
 | `-e SDL_GAMECONTROLLERCONFIG=` | Manual SDL2 GameController mapping override for specific gamepads (see [Gamepad Mapping](#gamepad-mapping)) | Optional |
+| `-e ESDE_AUDIO_OUTPUT=auto` | Audio output selection: `auto` (USB > 3.5mm > HDMI), `analog` (RPi 3.5mm jack), `hdmi`, `usb` | Optional |
+| `-e LOCAL_AUDIO_SINK=` | Override auto-detect with a specific PulseAudio sink name | Optional |
+
+#### Selkies (WebRTC Streaming) Service
+
+| Parameter | Default | Function |
+| :----: | :----: | --- |
+| `TITLE` | `EmulationStation-DE` | Browser tab / window title |
+| `NO_DECOR` | `true` | Fullscreen with no window borders |
+| `CUSTOM_USER` | `abc` | WebRTC authentication username — **change this** |
+| `PASSWORD` | `abc` | WebRTC authentication password — **change this** |
+| `ESDE_ARGS` | | Optional extra flags for es-de |
+| `HARDEN_DESKTOP` | `true` | Disables sudo, terminals, xdg-open (kiosk mode) |
+| `HARDEN_OPENBOX` | `true` | Disables close button, right-click, Alt+F4 |
+| `RESTART_APP` | `true` | Auto-restart ES-DE if closed |
+| `START_DOCKER` | `false` | Docker-in-Docker (not needed) |
+| `SELKIES_ENCODER` | `x264enc` | Video encoder for WebRTC stream |
+| `SELKIES_FRAMERATE` | `60` | Streaming framerate |
+| `SELKIES_AUDIO_ENABLED` | `true` | Enable audio streaming |
+| `SELKIES_GAMEPAD_ENABLED` | `true` | Enable gamepad input via browser |
+| `SELKIES_IS_MANUAL_RESOLUTION_MODE` | `true` | Lock resolution — dynamic resize can destroy the GLES context and crash ES-DE |
+| `SELKIES_MANUAL_WIDTH` | `1920` | Locked stream width |
+| `SELKIES_MANUAL_HEIGHT` | `1080` | Locked stream height |
+| `SELKIES_CLIPBOARD_ENABLED` | `false` | Clipboard disabled — xclip hangs with no owner and floods logs |
+| `SELKIES_CLIPBOARD_IN_ENABLED` | `false` | Clipboard input disabled |
+| `SELKIES_CLIPBOARD_OUT_ENABLED` | `false` | Clipboard output disabled |
+| `SELKIES_UI_SIDEBAR_SHOW_FILES` | `false` | Hide file browser panel |
+| `SELKIES_UI_SIDEBAR_SHOW_APPS` | `false` | Hide apps panel |
+| `SELKIES_UI_SIDEBAR_SHOW_CLIPBOARD` | `false` | Hide clipboard panel |
+| `SELKIES_FILE_TRANSFERS` | | File transfers disabled |
+| `SELKIES_COMMAND_ENABLED` | `false` | Command execution disabled |
+| `HDMI_MIRROR` | `true` | Mirror output to physical HDMI display |
+| `MIRROR_FRAMERATE` | `30` | Mirror FPS |
+| `MIRROR_CONNECTOR_ID` | | DRM connector ID (auto-detect if empty) |
+| `LOCAL_AUDIO` | `true` | Mirror audio to local USB/HDMI speakers |
+| `LOCAL_AUDIO_SINK` | | PulseAudio sink name (auto-detect USB/ALSA) |
+| `LOCAL_INPUT` | `true` | Forward local USB keyboard/mouse to Xvfb |
+| `LOCAL_INPUT_GRAB` | `true` | Grab input exclusively (`false` to share with console) |
+
+Selkies WebRTC access: port `3000` (HTTP) and port `3001` (HTTPS, primary access).
+
+#### Audio Configuration (Default Service)
+
+`ESDE_AUDIO_OUTPUT` controls which audio output to use:
+
+| Value | Description |
+| --- | --- |
+| `auto` | USB > 3.5mm analog > HDMI (default) |
+| `analog` | Force 3.5mm headphone jack (RPi only) |
+| `hdmi` | Force HDMI audio |
+| `usb` | Force USB audio device |
+
+**Raspberry Pi audio notes:**
+- For RPi 3.5mm audio, you **must** set the Balena device variable: `BALENA_HOST_CONFIG_dtparam = "audio=on"`
+- For RPi HDMI audio, if no sound plays set: `BALENA_HOST_CONFIG_hdmi_drive = 2`
 
 ### Storage Mounts
 
@@ -515,6 +601,16 @@ See [docker-retrostack](https://github.com/blackoutsecure/docker-retrostack) for
 | `-v /roms` | ROM library mount | Recommended |
 | `-v /bios` | BIOS files for emulator backends that need them | Optional |
 | `-v /tmp/.X11-unix:/tmp/.X11-unix:ro` | X11 socket for local display (only needed when `ESDE_USE_INTERNAL_X=0`) | Conditional |
+
+**Named volumes (compose):**
+
+| Volume | Purpose |
+| --- | --- |
+| `emulationstation-config` | ES-DE configuration and persistent data |
+| `emulationstation-roms` | ROM library |
+| `emulationstation-bios` | BIOS files for emulators |
+| `retrostack-emulator-control` | FIFO control pipes shared with RetroStack containers |
+| `retrostack-shared` | Gamepad DB and Xauthority shared with RetroStack containers |
 
 ### Devices
 

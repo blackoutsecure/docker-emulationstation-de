@@ -1,17 +1,3 @@
-# Consolidated docker-compose for EmulationStation-DE
-#
-# Three profile groups:
-#   docker compose --profile default up -d     # Local display / kiosk
-#   docker compose --profile selkies up -d     # Selkies WebRTC streaming
-#   docker compose --profile retrostack up -d  # + RetroStack emulators (retroarch, ppsspp, dolphin-emu)
-#
-# Combined example:
-#   docker compose --profile default --profile retrostack up -d
-#
-# Build locally:
-#   docker compose --profile default build
-#   docker compose --profile selkies build
-
 x-common: &common
   restart: unless-stopped
   tmpfs:
@@ -27,15 +13,36 @@ x-common: &common
     - emulationstation-config:/config
     - emulationstation-roms:/roms
     - emulationstation-bios:/bios
-    - retrostack-emulator-control:/run/retrostack-emulators  # FIFO pipes for RetroStack integration
-    - retrostack-shared:/run/retrostack-shared               # Shared gamepad DB + Xauthority
+    - retrostack-emulator-control:/run/retrostack-emulators
+    - retrostack-shared:/run/retrostack-shared
   devices:
     - /dev/dri:/dev/dri
 
+x-retrostack-common: &retrostack-common
+  restart: unless-stopped
+  tmpfs:
+    - /var/tmp
+    - /run:exec
+  shm_size: 1gb
+  read_only: false
+  labels:
+    io.balena.features.kernel-modules: '1'
+    io.balena.features.firmware: '1'
+    io.balena.features.dbus: '1'
+  volumes:
+    - retrostack-emulator-control:/run/retrostack-emulators
+    - retrostack-shared:/run/retrostack-shared:ro
+    - emulationstation-config:/config
+    - emulationstation-roms:/roms:ro
+    - emulationstation-bios:/bios:ro
+    - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    - /run/user/${UID:-1000}/pulse:/run/pulse:ro
+  devices:
+    - /dev/dri:/dev/dri
+    - /dev/input:/dev/input
+    - /dev/snd:/dev/snd
+
 services:
-  # ── Local display / kiosk ──────────────────────────────────────────
-  # Direct output to a connected monitor via KMSDRM or X11.
-  # Best for arcade cabinets, HTPC, and Balena with a physical display.
   emulationstation:
     <<: *common
     profiles: [default]
@@ -51,28 +58,6 @@ services:
       XDG_RUNTIME_DIR: /run/esde
       ESDE_VIDEO_DRIVER: 'kmsdrm'
       UDEV: '1'
-      # --- Audio (USB speakers / HDMI audio / 3.5mm jack) ---
-      # ESDE_AUDIO_OUTPUT controls which audio output to use:
-      #   auto    — USB > 3.5mm analog > HDMI (default)
-      #   analog  — Force 3.5mm headphone jack (RPi only)
-      #   hdmi    — Force HDMI audio
-      #   usb     — Force USB audio device
-      # ESDE_AUDIO_OUTPUT: 'auto'
-      #
-      # For RPi 3.5mm audio, you MUST also set this Balena device variable:
-      #   BALENA_HOST_CONFIG_dtparam = "audio=on"
-      #
-      # For RPi HDMI audio, if no sound plays set:
-      #   BALENA_HOST_CONFIG_hdmi_drive = 2
-      #
-      # LOCAL_AUDIO_SINK: ''            # Override auto-detect with a specific PulseAudio sink name
-      # --- Gamepad mapping ---
-      # Most gamepads are auto-detected via the bundled community database
-      # (~3000 mappings) and a generic fallback mapper for unknown devices.
-      # If auto-mapping produces incorrect button assignments, generate a
-      # custom mapping at https://github.com/gabomdq/SDL_GameControllerDB
-      # and paste it here — it overrides the auto-generated mapping.
-      # SDL_GAMECONTROLLERCONFIG: ''    # Manual override mapping string
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
@@ -81,10 +66,6 @@ services:
       - /dev/snd:/dev/snd
     privileged: true
 
-  # ── Selkies WebRTC streaming ───────────────────────────────────────
-  # Stream ES-DE to any web browser via WebRTC.
-  # Access at https://<host>:3001  (default user: abc / password: abc)
-  # Best for remote play, headless servers, and cloud deployments.
   emulationstation-selkies:
     <<: *common
     profiles: [selkies]
@@ -97,149 +78,74 @@ services:
     environment:
       TZ: Etc/UTC
       ESDE_HOME: /config
-      # ESDE_ARGS: ''                  # Optional extra flags for es-de
       TITLE: EmulationStation-DE
-      NO_DECOR: 'true'                 # Fullscreen, no window borders
-      # --- Authentication (change these!) ---
+      NO_DECOR: 'true'
       CUSTOM_USER: abc
       PASSWORD: abc
-      # --- Hardening (kiosk / appliance mode) ---
-      HARDEN_DESKTOP: 'true'           # Disables sudo, terminals, xdg-open
-      HARDEN_OPENBOX: 'true'           # Disables close button, right-click, Alt+F4
-      RESTART_APP: 'true'              # Auto-restart ES-DE if closed
-      START_DOCKER: 'false'            # No Docker-in-Docker needed
-      # --- Selkies Streaming ---
+      HARDEN_DESKTOP: 'true'
+      HARDEN_OPENBOX: 'true'
+      RESTART_APP: 'true'
+      START_DOCKER: 'false'
       SELKIES_ENCODER: 'x264enc'
       SELKIES_FRAMERATE: '60'
       SELKIES_AUDIO_ENABLED: 'true'
       SELKIES_GAMEPAD_ENABLED: 'true'
-      # Lock resolution so Selkies does not dynamically resize Xvfb.
-      # Dynamic resize can destroy the GLES context and crash ES-DE.
       SELKIES_IS_MANUAL_RESOLUTION_MODE: 'true'
       SELKIES_MANUAL_WIDTH: '1920'
       SELKIES_MANUAL_HEIGHT: '1080'
-      # --- Clipboard (disabled — xclip hangs with no owner, floods logs) ---
       SELKIES_CLIPBOARD_ENABLED: 'false'
       SELKIES_CLIPBOARD_IN_ENABLED: 'false'
       SELKIES_CLIPBOARD_OUT_ENABLED: 'false'
-      # --- Selkies UI Tweaks (hide panels not needed for ES-DE) ---
       SELKIES_UI_SIDEBAR_SHOW_FILES: 'false'
       SELKIES_UI_SIDEBAR_SHOW_APPS: 'false'
       SELKIES_UI_SIDEBAR_SHOW_CLIPBOARD: 'false'
       SELKIES_FILE_TRANSFERS: ''
       SELKIES_COMMAND_ENABLED: 'false'
-      # --- HDMI Mirror (optional — mirror to local display) ---
-      HDMI_MIRROR: 'true'              # 'true' to output to physical HDMI
-      # MIRROR_FRAMERATE: '30'         # Mirror FPS (default: 30)
-      # MIRROR_CONNECTOR_ID: ''        # DRM connector ID (auto-detect)
-      # --- Audio (optional — play on USB/HDMI speakers) ---
-      LOCAL_AUDIO: 'true'             # 'true' to mirror audio to local device
-      # LOCAL_AUDIO_SINK: ''            # PulseAudio sink name (auto-detect USB/ALSA)
-      # --- Local Input (optional — forward USB keyboard/mouse to Xvfb) ---
-      LOCAL_INPUT: 'true'              # 'true' to forward local keyboard/mouse
-      # LOCAL_INPUT_GRAB: 'true'       # 'false' to share input with console
+      HDMI_MIRROR: 'true'
+      LOCAL_AUDIO: 'true'
+      LOCAL_INPUT: 'true'
     devices:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
       - /dev/uinput:/dev/uinput
       - /dev/snd:/dev/snd
-    privileged: true                   # Required for DRM master (HDMI output)
+    privileged: true
     ports:
-      - '3000:3000'   # HTTP
-      - '3001:3001'   # HTTPS (primary access)
+      - '3000:3000'
+      - '3001:3001'
     security_opt:
       - seccomp=unconfined
 
-  # ── RetroStack Emulators (FIFO control pipe integration) ───────────
-  # These services run emulators from docker-retrostack as separate containers.
-  # ES-DE communicates with them via FIFO pipes at /run/retrostack-emulators/.
-  # When the user selects a game, ES-DE calls retrostack-emulator-launch which
-  # writes launch args to the FIFO, the emulator runs the game on the shared
-  # display, and writes the exit code back.
-  #
-  # Usage:
-  #   docker compose --profile default --profile retrostack up -d
-  #   docker compose --profile selkies --profile retrostack up -d
-  #
-  # See: https://github.com/blackoutsecure/docker-retrostack
   retrostack-retroarch:
+    <<: *retrostack-common
     profiles: [retrostack]
     image: docker.io/blackoutsecure/retrostack:retroarch
     container_name: retrostack-retroarch
-    restart: unless-stopped
     environment:
       DISPLAY: ${DISPLAY:-:0}
       PULSE_SERVER: ${PULSE_SERVER:-unix:/run/pulse/native}
-    volumes:
-      - retrostack-emulator-control:/run/retrostack-emulators
-      - retrostack-shared:/run/retrostack-shared:ro
-      - emulationstation-config:/config
-      - emulationstation-roms:/roms:ro
-      - emulationstation-bios:/bios:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/input:/dev/input
-      - /dev/snd:/dev/snd
-    tmpfs:
-      - /var/tmp
-      - /run:exec
-    shm_size: 1gb
-    labels:
-      io.balena.features.kernel-modules: '1'
-      io.balena.features.firmware: '1'
 
   retrostack-ppsspp:
+    <<: *retrostack-common
     profiles: [retrostack-ppsspp, retrostack-all]
     image: docker.io/blackoutsecure/retrostack:ppsspp
     container_name: retrostack-ppsspp
-    restart: unless-stopped
     environment:
       DISPLAY: ${DISPLAY:-:0}
       PULSE_SERVER: ${PULSE_SERVER:-unix:/run/pulse/native}
-    volumes:
-      - retrostack-emulator-control:/run/retrostack-emulators
-      - retrostack-shared:/run/retrostack-shared:ro
-      - emulationstation-config:/config
-      - emulationstation-roms:/roms:ro
-      - emulationstation-bios:/bios:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/input:/dev/input
-      - /dev/snd:/dev/snd
-    tmpfs:
-      - /var/tmp
-      - /run:exec
-    shm_size: 1gb
 
   retrostack-dolphin-emu:
+    <<: *retrostack-common
     profiles: [retrostack-dolphin, retrostack-all]
     image: docker.io/blackoutsecure/retrostack:dolphin-emu
     container_name: retrostack-dolphin-emu
-    restart: unless-stopped
     environment:
       DISPLAY: ${DISPLAY:-:0}
       PULSE_SERVER: ${PULSE_SERVER:-unix:/run/pulse/native}
-    volumes:
-      - retrostack-emulator-control:/run/retrostack-emulators
-      - retrostack-shared:/run/retrostack-shared:ro
-      - emulationstation-config:/config
-      - emulationstation-roms:/roms:ro
-      - emulationstation-bios:/bios:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/input:/dev/input
-      - /dev/snd:/dev/snd
-    tmpfs:
-      - /var/tmp
-      - /run:exec
-    shm_size: 1gb
 
 volumes:
   emulationstation-config:
   emulationstation-roms:
   emulationstation-bios:
-  retrostack-emulator-control:       # FIFO control pipes (shared with RetroStack containers)
-  retrostack-shared:                 # Gamepad DB + Xauthority (shared with RetroStack containers)
+  retrostack-emulator-control:
+  retrostack-shared:
