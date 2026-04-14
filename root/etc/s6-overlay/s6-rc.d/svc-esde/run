@@ -559,19 +559,53 @@ _retrostack_launch="/usr/local/bin/retrostack-emulator-launch"
 _retrostack_shared="/run/retrostack-shared"
 
 # --- RetroStack FIFO integration ---
-# Scan for FIFO command pipes created by running RetroStack emulator containers.
-# For each <name>.cmd pipe found, symlink retrostack-emulator-launch as the
-# emulator name on PATH so ES-DE can launch games via the FIFO protocol.
+# ES-DE resolves emulator names (e.g. %EMULATOR_RETROARCH%) to binaries on PATH.
+# RetroStack emulator containers create FIFO pipes at:
+#   /run/retrostack-emulators/<name>.cmd  /  <name>.status
+# retrostack-emulator-launch acts as a shim: when called as <name>, it writes
+# to the pipe and waits for a status reply.
+#
+# Problem: RetroStack containers may start AFTER ES-DE.  If we only create
+# symlinks for already-running emulators, ES-DE shows "%EMULATOR_RETROARCH%
+# not found" when the user launches a game.
+#
+# Fix: Pre-create symlinks for well-known emulators so ES-DE always finds them
+# on PATH.  retrostack-emulator-launch already handles the "pipe not found"
+# case with a clear error message ("Is the container running?").
+# Additional emulators discovered via FIFO pipes are also symlinked.
+
+# Well-known emulator names that ES-DE expects on PATH.
+# RETROSTACK_EMULATORS can override/extend this list (comma-separated).
+_default_emus="retroarch,PPSSPPSDL,dolphin-emu"
+IFS=',' read -ra _known_emus <<< "${RETROSTACK_EMULATORS:-${_default_emus}}"
+
 _retrostack_emus=""
-if [[ -d "${_retrostack_control}" && -x "${_retrostack_launch}" ]]; then
-  for _cmd_pipe in "${_retrostack_control}"/*.cmd; do
-    [[ -p "${_cmd_pipe}" ]] || continue
-    _emu_name="$(basename "${_cmd_pipe}" .cmd)"
+_retrostack_emus_live=""
+
+if [[ -x "${_retrostack_launch}" ]]; then
+  # 1. Pre-create symlinks for all known emulators (regardless of running state)
+  for _emu_name in "${_known_emus[@]}"; do
+    _emu_name="$(echo "${_emu_name}" | xargs)"  # trim whitespace
+    [[ -z "${_emu_name}" ]] && continue
     ln -sf "${_retrostack_launch}" "/usr/local/bin/${_emu_name}"
     _retrostack_emus="${_retrostack_emus:+${_retrostack_emus}, }${_emu_name}"
   done
 
-  # Export the gamepad DB to the shared volume so RetroStack emulators
+  # 2. Also symlink any currently-active FIFO pipes (catches custom emulators)
+  if [[ -d "${_retrostack_control}" ]]; then
+    for _cmd_pipe in "${_retrostack_control}"/*.cmd; do
+      [[ -p "${_cmd_pipe}" ]] || continue
+      _emu_name="$(basename "${_cmd_pipe}" .cmd)"
+      ln -sf "${_retrostack_launch}" "/usr/local/bin/${_emu_name}"
+      _retrostack_emus_live="${_retrostack_emus_live:+${_retrostack_emus_live}, }${_emu_name}"
+      # Add to the known list if not already there
+      if [[ ", ${_retrostack_emus}, " != *", ${_emu_name}, "* ]]; then
+        _retrostack_emus="${_retrostack_emus:+${_retrostack_emus}, }${_emu_name}"
+      fi
+    done
+  fi
+
+  # 3. Export the gamepad DB to the shared volume so RetroStack emulators
   # use ES-DE's auto-generated + community mappings.
   if [[ -d "${_retrostack_shared}" ]]; then
     _gcdb_runtime="/tmp/gamecontrollerdb.txt"
@@ -586,10 +620,35 @@ if [[ -d "${_retrostack_control}" && -x "${_retrostack_launch}" ]]; then
       chmod 644 "${_retrostack_shared}/.Xauthority" 2>/dev/null || true
     fi
   fi
+
+  # 4. Background watcher: create symlinks for emulators that appear later.
+  # Polls the control directory every 5s for new FIFO pipes and symlinks them.
+  if [[ -d "${_retrostack_control}" ]]; then
+    (
+      _known_set=",${_retrostack_emus// /},"
+      while true; do
+        sleep 5
+        for _cmd_pipe in "${_retrostack_control}"/*.cmd; do
+          [[ -p "${_cmd_pipe}" ]] || continue
+          _emu="$(basename "${_cmd_pipe}" .cmd)"
+          if [[ ",${_known_set}," != *",${_emu},"* ]]; then
+            ln -sf "${_retrostack_launch}" "/usr/local/bin/${_emu}" 2>/dev/null || true
+            _known_set="${_known_set}${_emu},"
+            echo "[svc-esde] Late-discovered emulator: ${_emu} (symlinked)"
+          fi
+        done
+      done
+    ) &
+  fi
 fi
 
 if [[ -n "${_retrostack_emus}" ]]; then
-  _summary_emulator="Emulator: RetroStack [${_retrostack_emus}]"
+  if [[ -n "${_retrostack_emus_live}" ]]; then
+    _summary_emulator="Emulator: RetroStack [${_retrostack_emus}] (live: ${_retrostack_emus_live})"
+  else
+    _summary_emulator="Emulator: RetroStack [${_retrostack_emus}] (pre-linked, waiting for containers)"
+    _summary_emulator="${_summary_emulator} | Start RetroStack: docker compose --profile retrostack up -d"
+  fi
 else
   _summary_emulator="Emulator: WARNING no emulators found — games will fail"
   _summary_emulator="${_summary_emulator} | Start RetroStack: docker compose --profile retrostack up -d"
