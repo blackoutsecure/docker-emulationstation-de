@@ -476,6 +476,34 @@ if s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
   fi
 fi
 
+# --- Share PulseAudio socket with RetroStack containers ---
+# RetroStack emulator containers mount the pulse-socket volume at /run/pulse
+# and set PULSE_SERVER=unix:/run/pulse/native.  Expose a secondary PA socket
+# there so they can connect to our PulseAudio server.
+if [[ -d /run/pulse ]] && s6-setuidgid "${APP_USER:-abc}" pulseaudio --check 2>/dev/null; then
+  # Load a secondary unix socket at the shared volume path.
+  # auth-anonymous=1 allows the unprivileged user inside RetroStack containers
+  # to connect without a matching cookie.
+  if s6-setuidgid "${APP_USER:-abc}" pactl load-module module-native-protocol-unix \
+       auth-anonymous=1 socket=/run/pulse/native 2>/dev/null; then
+    chmod 666 /run/pulse/native 2>/dev/null || true
+    echo "[svc-esde] PulseAudio socket exported to /run/pulse/native for RetroStack."
+  else
+    echo "[svc-esde] Warning: could not export PulseAudio socket to /run/pulse/native." >&2
+  fi
+fi
+
+# --- Share X11 socket with RetroStack containers ---
+# RetroStack emulator containers mount x11-unix at /tmp/.X11-unix:ro and set
+# DISPLAY=:0.  When ES-DE starts its own Xorg (internal X), the socket is
+# created inside the shared volume automatically because /tmp/.X11-unix is the
+# x11-unix volume.  Share Xauthority via retrostack-shared so emulators can
+# connect.
+if [[ -d /run/retrostack-shared ]] && [[ -f "${XAUTHORITY:-}" ]]; then
+  cp -f "${XAUTHORITY}" /run/retrostack-shared/.Xauthority 2>/dev/null || true
+  chmod 644 /run/retrostack-shared/.Xauthority 2>/dev/null || true
+fi
+
 # --- Gamepad / input device diagnostics ---
 if [[ -d /dev/input ]]; then
   _js_devs="$(ls /dev/input/js* 2>/dev/null)" || true
